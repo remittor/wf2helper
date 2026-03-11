@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+"""
+wf2overlay.py
+Wreckfest 2 HUD overlays (tkinter Canvas, always-on-top, transparent).
+
+Two independent overlay windows:
+  leaderboard  — race standings table with delta times
+  advinfo      — advanced car info: race timer, inputs, engine, tires, etc.
+
+Text is rendered on a Canvas with a 1px drop-shadow (right+down) for
+readability on any background — works with transparent: true mode.
+
+Config (wf2hlp.yaml):
+
+    overlays:
+        leaderboard:
+            x: 20
+            y: 80
+            ...
+        advinfo:
+            x: 20
+            y: 600
+            ...
+
+Appearance keys (same for both sections):
+    x, y, alpha, font, font_size, bg, fg, fg_player, fg_dnf,
+    shadow, transparent, chroma_key
+    max_rows   — leaderboard only
+"""
+
+import tkinter as tk
+import tkinter.font as tkfont
+import threading
+import queue
+import time
+from dataclasses import dataclass, field
+
+from wf2telemetry import *
+
+OV_DEFAULTS = dict(
+    x           = 20,
+    y           = 80,
+    alpha       = 0.82,
+    transparent = False,
+    chroma_key  = "#010101",
+    bg          = "#1a1a1a",
+    font        = "Courier New",
+    font_size   = 11,
+    bold        = True,
+    shadow      = "#000000",    # drop-shadow colour
+    fg          = "#e0e0e0",
+    fg_player   = "#ffdd44",
+    fg_dnf      = "#888888",
+)
+
+def ov_cfg(section: dict) -> dict:
+    d = dict(OV_DEFAULTS)
+    d.update(section)
+    if d["transparent"]:
+        d["bg"] = d["chroma_key"]
+    return d
+
+
+class BaseOverlay:
+    """
+    Always-on-top tkinter Canvas window in its own daemon thread.
+
+    _render(data) must return: list of lines.
+    Each line is a list of (text, color_hex) tuples — segments placed
+    left-to-right in monospace columns.
+
+    For each segment the engine draws:
+      1. Shadow copy at (+1, +1) px in self.shadow colour
+      2. Main text at (0, 0) in the segment colour
+    """
+
+    SHADOW_DX = 1
+    SHADOW_DY = 1
+    PAD       = 4   # canvas padding px
+
+    def __init__(self, ov: dict, title: str):
+        self.ov     = ov
+        self.title  = title
+        self.shadow = ov.get("shadow", "#000000")
+        self.queue  = queue.Queue(maxsize=8)
+        self.last   = None
+        self.root   = None
+        self.canvas = None
+        self.font   = None   # tkfont.Font
+        self.cw     = 0      # char width px
+        self.lh     = 0      # line height px
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def push(self, data) -> None:
+        try:
+            self.queue.put_nowait(data)
+        except queue.Full:
+            pass
+
+    def run(self) -> None:
+        ov   = self.ov
+        root = tk.Tk()
+        self.root = root
+
+        root.title(self.title)
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.attributes("-alpha", ov["alpha"])
+        root.configure(bg=ov["bg"])
+        if ov["transparent"]:
+            root.attributes("-transparentcolor", ov["chroma_key"])
+        root.geometry(f"+{ov['x']}+{ov['y']}")
+
+        # Use a named font registered on THIS Tk instance so Canvas in this
+        # window always resolves it correctly (avoids cross-Tk font corruption
+        # when two Toplevel/Tk windows live in separate threads).
+        self.font = tkfont.Font(
+            root   = root,
+            family = ov["font"],
+            size   = ov["font_size"],
+            weight = "bold" if ov["bold"] else "",
+        )
+        self.cw   = self.font.measure("W")
+        self.lh   = self.font.metrics("linespace")
+
+        self.canvas = tk.Canvas(
+            root,
+            bg = ov["bg"],
+            highlightthickness = 0,
+            cursor = "arrow",
+        )
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        root.bind("<ButtonPress-1>", self.drag_start)
+        root.bind("<B1-Motion>",     self.drag_motion)
+
+        self.poll()
+        root.mainloop()
+
+    def poll(self) -> None:
+        try:
+            while True:
+                self.last = self.queue.get_nowait()
+        except (queue.Empty, queue.Full):
+            pass
+        if self.last is not None:
+            lines = self.render(self.last)
+            self.draw(lines)
+        if self.root:
+            self.root.after(100, self.poll)
+
+    def draw(self, lines: list) -> None:
+        c = self.canvas
+        if c is None:
+            return
+        c.delete("all")
+        pad    = self.PAD
+        lh     = self.lh
+        cw     = self.cw
+        font   = self.font
+        shadow = self.shadow
+        dx, dy = self.SHADOW_DX, self.SHADOW_DY
+        fg_def = self.ov["fg"]
+        max_col = 0
+        for row_i, segments in enumerate(lines):
+            y = pad + row_i * lh
+            col = 0
+            for seg in segments:
+                if seg is None:
+                    continue
+                text, color = seg
+                if text is None:
+                    continue
+                x = pad + col * cw
+                # 1. shadow
+                c.create_text(x + dx, y + dy, text=text, fill=shadow, font=font, anchor="nw")
+                # 2. main
+                c.create_text(x, y, text=text, fill=color or fg_def, font=font, anchor="nw")
+                col += len(text)
+                pass
+            max_col = max(max_col, col)
+            pass
+        w = pad * 2 + max_col * cw + dx
+        h = pad * 2 + len(lines) * lh + dy
+        c.configure(width=w, height=h)
+        self.root.geometry(f"{w}x{h}")
+
+    def get_color(self, tag: str) -> str:
+        ov = self.ov
+        TABLE = {
+            "":       ov.get("fg",        "#e0e0e0"),
+            "header": "#aaaaaa",
+            "player": ov.get("fg_player", "#ffdd44"),
+            "hi":     ov.get("fg_player", "#ffdd44"),
+            "dnf":    ov.get("fg_dnf",    "#888888"),
+            "label":  "#777777",
+            "warn":   "#ff6644",
+            "good":   "#44dd88",
+            "air":    "#44bbff",
+        }
+        return TABLE.get(tag, ov.get("fg", "#e0e0e0"))
+
+    def gen_segment(self, text: str, tag: str = "") -> tuple:
+        """Build one segment: (text, colour)."""
+        return (text, self.get_color(tag))
+
+    def render(self, data) -> list:
+        raise NotImplementedError
+
+    def drag_start(self, event) -> None:
+        self.drag_x = event.x
+        self.drag_y = event.y
+
+    def drag_motion(self, event) -> None:
+        if self.root:
+            x = self.root.winfo_x() + (event.x - self.drag_x)
+            y = self.root.winfo_y() + (event.y - self.drag_y)
+            self.root.geometry(f"+{x}+{y}")
+
+
+@dataclass
+class ParticipantRow:
+    index:        int
+    position:     int  = 0
+    name:         str  = ""
+    car_name:     str  = ""
+    lap:          int  = 0
+    health:       int  = 100
+    delta_leader: int  = 0
+    delta_ahead:  int  = 0
+    delta_behind: int  = 0
+    delta_to_player: int = 0   # computed: positive = behind player, negative = ahead
+    status:       int  = 0
+    is_player:    bool = False
+
+    @property
+    def status_str(self) -> str:
+        return {
+            PARTICIPANT_STATUS_RACING:         "",
+            PARTICIPANT_STATUS_FINISH_SUCCESS: "FIN",
+            PARTICIPANT_STATUS_DNF_DQ:         "DQ",
+            PARTICIPANT_STATUS_DNF_RETIRED:    "RET",
+            PARTICIPANT_STATUS_DNF_TIMEOUT:    "T/O",
+            PARTICIPANT_STATUS_DNF_WRECKED:    "WRK",
+        }.get(self.status, "")
+
+    @property
+    def delta_str(self) -> str:
+        """Delta relative to the player's car.
+        Positive (+) = this participant is behind the player.
+        Negative (-) = this participant is ahead of the player.
+        Blank for the player's own row."""
+        if self.is_player:
+            return "  ←YOU→ "
+        ms   = abs(self.delta_to_player)
+        sign = "+" if self.delta_to_player >= 0 else "-"
+        s    = ms // 1000
+        frac = (ms % 1000) // 10
+        return f" {sign}{s:3d}.{frac:02d}"
+
+
+@dataclass
+class LeaderboardSnapshot:
+    rows:       list  = field(default_factory=list)
+    track_name: str   = ""
+    lap_total:  int   = 0
+    updated_at: float = 0.0
+
+
+class LeaderboardOverlay(BaseOverlay):
+    def __init__(self, ov: dict):
+        self.max_rows = ov.get("max_rows", 24)
+        super().__init__(ov, "WF2 Leaderboard")
+
+    def render(self, snap: LeaderboardSnapshot) -> list:
+        seg = self.gen_segment
+        lines = [ ]
+
+        def line(*segs):
+            lines.append(list(segs))
+
+        track = snap.track_name[:30] if snap.track_name else "---"
+        line(seg(f" {track}", "header"))
+        line(seg(f" {'P':>2}  {'Name':<16} {'Car':<12} {'Lap':>5}  {'Δ to you':>8}  {'HP':>3}  St", "header"))
+
+        rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
+        for row in rows[:self.max_rows]:
+            lap_str  = f"{row.lap}/{snap.lap_total}" if snap.lap_total else str(row.lap)
+            name_str = row.name[:16]     if row.name     else f"P{row.index:02d}"
+            car_str  = row.car_name[:12] if row.car_name else ""
+            pos_str  = f"{row.position:>2}" if row.position else " ?"
+            tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
+            line(seg(f" {pos_str}  {name_str:<16} {car_str:<12} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
+        return lines
+
+
+@dataclass
+class AdvInfoSnapshot:
+    race_time_ms:   int   = 0
+    race_finished:  bool  = False
+    frozen_time_ms: int   = 0
+
+    throttle:   float = 0.0
+    brake:      float = 0.0
+    clutch:     float = 0.0
+    handbrake:  float = 0.0
+    steering:   float = 0.0
+
+    torque:       float = 0.0
+    power:        float = 0.0
+    temp_block:   float = 0.0
+    temp_water:   float = 0.0
+    pressure_oil: float = 0.0
+    misfiring:    bool  = False
+
+    traction_state: str = ""
+    health:         int = 100
+
+    tire_slip: tuple = (0.0, 0.0, 0.0, 0.0)
+    tire_temp: tuple = (0.0, 0.0, 0.0, 0.0)
+    tire_load: tuple = (0.0, 0.0, 0.0, 0.0)
+    tire_surf: tuple = (0,   0,   0,   0)
+    susp_norm: tuple = (0.0, 0.0, 0.0, 0.0)
+
+
+WF2_SURF = { 0: " --- ", 1: " AIR ", 2: " GND ", 3: " GRS ", 4: " GVL ", 5: " MUD ", 6: " SNW ", 7: " ICE ", 8: " ASP " }
+
+
+class AdvInfoOverlay(BaseOverlay):
+    def __init__(self, ov: dict):
+        super().__init__(ov, "WF2 AdvInfo")
+
+    @staticmethod
+    def bar(value: float, width: int = 12, full: str = "█", empty: str = "░") -> str:
+        n = round(max(0.0, min(1.0, value)) * width)
+        return full * n + empty * (width - n)
+
+    @staticmethod
+    def fmt_time(ms: int) -> str:
+        ms   = max(0, ms)
+        mins = ms // 60000
+        secs = (ms % 60000) // 1000
+        frac = ms % 1000
+        return f"{mins:02d}:{secs:02d}.{frac:03d}"
+
+    def render(self, s_data: AdvInfoSnapshot) -> list:
+        s = self.gen_segment  # segment builder
+        d = s_data
+        lines  = [ ]             # lines accumulator
+
+        def line(*segs):
+            lines.append(list(segs))
+
+        # Race timer
+        display_ms = d.frozen_time_ms if d.race_finished else d.race_time_ms
+        fin_tag    = "good" if d.race_finished else "hi"
+        fin_suffix = "  FINISH" if d.race_finished else ""
+        line(s(" TIME ", "label"), s(self.fmt_time(display_ms), fin_tag), s(fin_suffix, "good"))
+
+        # Inputs
+        line(s(" ──────────────────────────────", "label"))
+        bar_w = 20
+        line(s("THR ", "label"), s(self.bar(d.throttle,  bar_w), "good"), s(f" {d.throttle *100:5.1f}%"))
+        line(s("BRK ", "label"), s(self.bar(d.brake,     bar_w), "warn"), s(f" {d.brake    *100:5.1f}%"))
+        if d.clutch > 0.01:
+            line(s("CLT ", "label"), s(self.bar(d.clutch,    bar_w)),     s(f" {d.clutch   *100:5.1f}%"))
+        if d.handbrake > 0.01:
+            line(s("HBR ", "label"), s(self.bar(d.handbrake, bar_w), "warn"), s(f" {d.handbrake*100:5.1f}%"))
+        steer_c = (d.steering + 1.0) / 2.0
+        line(s("STR ", "label"), s(self.bar(steer_c,     bar_w)),         s(f" {d.steering *100:+6.1f}%"))
+
+        # Engine
+        line(s(" ──────────────────────────────", "label"))
+        line(s("TRQ ", "label"), s(f"{d.torque:7.1f} N·m"), s("  PWR ", "label"), s(f"{d.power/1000:7.1f} kW"))
+        t_eng = d.temp_block - 273.15
+        t_wat = d.temp_water - 273.15
+        t_eng_col = "warn" if t_eng > 120 else ""
+        t_wat_col = "warn" if t_eng > 110 else ""
+        extinfo = s("  ⚠  MISFIRE", "warn") if d.misfiring else None
+        line(s("ENG ", "label"), s(f"{t_eng:6.1f}°C", t_eng_col), s("     WAT ", "label"), s(f"{t_wat:6.1f}°C", t_wat_col))
+        line(s("OIL ", "label"), s(f"{d.pressure_oil:6.1f} kPa", "warn" if d.pressure_oil < 100 else ""), extinfo)
+
+        # Traction
+        tr = d.traction_state or "NORMAL"
+        tr_tag = "air" if tr in ("AIR", "SETTLING") else "good"
+        line(s("TRC ", "label"), s(tr, tr_tag))
+        '''
+        # ── Tires ─────────────────────────────────────────────────────────────
+        line(s("        FL      FR      RL      RR", "label"))
+
+        slip_segs = [s(" SLP  ", "label")]
+        for v in d.tire_slip:
+            slip_segs.append(s(f" {v:+6.3f}", "warn" if abs(v) > 0.3 else ""))
+        line(*slip_segs)
+
+        tmp_segs = [s(" TMP  ", "label")]
+        for v in d.tire_temp:
+            tmp_segs.append(s(f" {v:6.1f}°", "warn" if v > 100 else ""))
+        line(*tmp_segs)
+
+        lod_segs = [s(" LOD  ", "label")]
+        for v in d.tire_load:
+            lod_segs.append(s(f" {v:6.0f}N", "air" if v == 0 else ""))
+        line(*lod_segs)
+
+        srf_segs = [s(" SRF  ", "label")]
+        for v in d.tire_surf:
+            srf_segs.append(s(WF2_SURF.get(v, f"{v:>5} "), "air" if v == 1 else ""))
+        line(*srf_segs)
+
+        sus_segs = [s(" SUS  ", "label")]
+        for v in d.susp_norm:
+            sus_segs.append(s(f"  {v:5.2f}"))
+        line(*sus_segs)
+
+        # ── Health ────────────────────────────────────────────────────────────
+        line(s(" ──────────────────────────────", "label"))
+        hp_tag = "warn" if d.health < 40 else ("good" if d.health > 80 else "")
+        line(s(" HP   ", "label"),
+             s(self.bar(d.health / 100, 12), hp_tag),
+             s(f" {d.health:3d}%", hp_tag))
+        '''
+        return lines
+
+
+class LeaderboardState:
+    def __init__(self):
+        self.rows       : dict = { }
+        self.player_idx : int  = 255
+        self.track_name : str  = ""
+        self.lap_total  : int  = 0
+
+    def reset(self) -> None:
+        self.rows.clear()
+        self.player_idx = 255
+
+    def get(self, idx: int) -> ParticipantRow:
+        if idx not in self.rows:
+            self.rows[idx] = ParticipantRow(index=idx)
+        return self.rows[idx]
+
+    def update_main(self, pkt) -> None:
+        self.player_idx = pkt.participantPlayerInfo.participantIndex
+        self.track_name = pkt.session.trackName.decode("utf-8", errors="replace").strip("\x00")
+        self.lap_total  = pkt.session.laps
+
+    def update_leaderboard(self, pkt) -> None:
+        for i, lb in enumerate(pkt.participantsLeaderboard):
+            if lb.status == PARTICIPANT_STATUS_UNUSED:
+                continue
+            row = self.get(i)
+            row.status       = lb.status
+            row.position     = lb.position
+            row.lap          = lb.lapCurrent
+            row.health       = lb.health
+            row.delta_leader = lb.deltaLeader
+
+    def update_timing(self, pkt) -> None:
+        for i, tm in enumerate(pkt.participantsTiming):
+            if i not in self.rows:
+                continue
+            self.rows[i].delta_ahead  = tm.deltaAhead
+            self.rows[i].delta_behind = tm.deltaBehind
+
+    def update_info(self, pkt) -> None:
+        for i, info in enumerate(pkt.participantsInfo):
+            if info.participantIndex == 255:
+                continue
+            idx = info.participantIndex
+            row = self.get(idx)
+            row.name  = info.playerName.decode("utf-8", errors="replace").strip("\x00")
+            row.car_name = info.carName.decode("utf-8",    errors="replace").strip("\x00")
+
+    def snapshot(self) -> LeaderboardSnapshot:
+        rows = [ ]
+        for idx, row in self.rows.items():
+            if row.status == PARTICIPANT_STATUS_UNUSED:
+                continue
+            row.is_player = (idx == self.player_idx)
+            rows.append(row)
+
+        # Compute delta_to_player for each row.
+        # delta_leader is ms behind the race leader (0 for leader, >0 for rest).
+        # delta_to_player = participant.delta_leader - player.delta_leader:
+        #   > 0  participant is further behind the leader than the player → behind player
+        #   < 0  participant is closer to the leader than the player → ahead of player
+        player_rows = [r for r in rows if r.is_player]
+        player_delta = player_rows[0].delta_leader if player_rows else 0
+        for row in rows:
+            row.delta_to_player = player_delta - row.delta_leader
+
+        return LeaderboardSnapshot(
+            rows       = rows,
+            track_name = self.track_name,
+            lap_total  = self.lap_total,
+            updated_at = time.monotonic(),
+        )
+
+
+class AdvInfoState:
+    def __init__(self):
+        self.reset()
+
+    def reset(self) -> None:
+        self.race_finished:  bool = False
+        self.frozen_time_ms: int  = 0
+
+    def snapshot_from_main(self, pkt, traction_state: str = "") -> AdvInfoSnapshot:
+        hdr   = pkt.header
+        eng   = pkt.carPlayer.engine
+        inp   = pkt.carPlayer.input
+        lb    = pkt.participantPlayerLeaderboard
+        tires = pkt.carPlayer.tires
+
+        race_time_ms = max(0, hdr.raceTime)
+        finished = (lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS)
+
+        if finished and not self.race_finished:
+            self.race_finished  = True
+            self.frozen_time_ms = race_time_ms
+        elif not finished and self.race_finished:
+            self.race_finished  = False
+            self.frozen_time_ms = 0
+
+        return AdvInfoSnapshot(
+            race_time_ms   = race_time_ms,
+            race_finished  = self.race_finished,
+            frozen_time_ms = self.frozen_time_ms,
+
+            throttle  = inp.throttle,
+            brake     = inp.brake,
+            clutch    = inp.clutch,
+            handbrake = inp.handbrake,
+            steering  = inp.steering,
+
+            torque        = eng.torque,
+            power         = eng.power,
+            temp_block    = eng.tempBlock,
+            temp_water    = eng.tempWater,
+            pressure_oil  = eng.pressureOil,
+            misfiring     = eng.misfiring,
+
+            traction_state = traction_state,
+            health         = lb.health,
+
+            tire_slip = tuple(tires[i].slipRatio                 for i in range(4)),
+            tire_temp = tuple(tires[i].temperatureTread - 273.15 for i in range(4)),
+            tire_load = tuple(tires[i].loadVertical              for i in range(4)),
+            tire_surf = tuple(tires[i].surfaceType               for i in range(4)),
+            susp_norm = tuple(tires[i].suspensionDispNorm        for i in range(4)),
+        )
+
+
+def create_overlays(cfg: dict):
+    ovs = cfg.get("overlays", {})
+    lb_ov  = None
+    adv_ov = None
+
+    lb_sec = ovs.get("leaderboard")
+    if lb_sec is not None:
+        resolved = ov_cfg(lb_sec)
+        resolved["max_rows"] = lb_sec.get("max_rows", 16)
+        lb_ov = LeaderboardOverlay(resolved)
+
+    adv_sec = ovs.get("advinfo")
+    if adv_sec is not None:
+        adv_ov = AdvInfoOverlay(ov_cfg(adv_sec))
+
+    return lb_ov, adv_ov
+

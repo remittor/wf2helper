@@ -1,0 +1,56 @@
+udp_port: 23123
+
+keys:
+    up_shift: a
+    down_shift: z
+
+overlays:
+    leaderboard:
+        max_rows: 24       # max participants shown
+        x: 20              # screen position, pixels from left
+        y: 400             # screen position, pixels from top
+        alpha: 0.82        # transparency: 0.0 = invisible, 1.0 = opaque
+        transparent: true   # true = fully transparent background (Windows only)
+        chroma_key: "#00ff01"
+        bg: "#1a1a1a"        # background colour (ignored when transparent: true)
+        font_size: 10
+        font: "Courier New"
+        bold: true
+        shadow: "#000000"
+        fg: "#f0f0f0"
+        fg_player: "#ffdd44"
+        fg_dnf: "#888888"
+    advinfo:
+        x: 20
+        y: 820
+        alpha: 0.82
+        transparent: true
+        chroma_key: "#00ff01"
+        bg: "#1a1a1a"
+        font_size: 10
+        font: "Courier New"
+        bold: true
+        shadow: "#000000"
+        fg: "#f0f0f0"
+        fg_player: "#ffdd44"  # used for race timer
+
+auto_shifter:
+    landing_settle_ms: 400  # wait after landing before shifting, ms
+    airdownshift: { g5: 4, g4: 3 }  # while airborne, shift down to target gear (step by step).
+    key_hold_ms: 70
+    cooldown_ms: 350
+    up_shift_rules:
+        rpm: { g12: 0.95, g23: 0.95, g34: 0.95, g45: 0.95, g56: 0.95 }  # fraction of rpmRedline → shift up
+    down_shift_rules:
+        rpm: { g21: 0.40, g32: 0.40, g43: 0.40, g54: 0.40, g65: 0.40 }  # fraction of rpmRedline → shift down
+
+    # Per-car overrides. Key = carName lowercase (partial match not supported,
+    # must be exact lowercase carName as reported in telemetry).
+    car_settings:
+        rammer:
+            cooldown_ms: 360
+            up_shift_rules:
+                rpm: { g12: 0.95, g23: 0.95, g34: 0.95, g45: 0.95 }
+            down_shift_rules:
+                rpm: { g21: 0.40, g32: 0.40, g43: 0.40, g54: 0.40 }
+
