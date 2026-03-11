@@ -35,6 +35,29 @@ import enum
 import sys
 import types
 
+def unpack_tcl_files():
+    import os
+    tkinter_dir = os.path.dirname(os.path.abspath(__file__))
+    python_dir = os.path.dirname(tkinter_dir)
+    if not os.path.exists(python_dir):
+        RuntimeError(f'ERROR: Cannot found directory "{python_dir}"!')
+    tcl_dir = f'{python_dir}/tcl'
+    xx = 0
+    if not os.path.exists(f'{tcl_dir}/tcl8.6/init.tcl'):
+        xx += 1
+    if not os.path.exists(f'{tcl_dir}/tk8.6/tk.tcl'):
+        xx += 1
+    if xx > 0:
+        zip_file = f'{python_dir}/tcl.zip'
+        if not os.path.exists(zip_file):
+            RuntimeError(f'ERROR: Cannot found zip-file "{zip_file}"!')
+        import zipfile
+        dest_dir = f'{python_dir}/tcl'
+        with zipfile.ZipFile(zip_file, 'r') as zip:
+            zip.extractall(dest_dir)
+
+unpack_tcl_files()
+
 import _tkinter # If this fails your Python may not be configured for Tk
 TclError = _tkinter.TclError
 from tkinter.constants import *
