@@ -12,6 +12,9 @@ Requirements:
 """
 
 import sys
+import os
+import glob
+import json
 import time
 import threading
 import queue
@@ -560,6 +563,94 @@ class ActiveWindowChecker:
         return self.buf.value
 
 
+def find_telemetry_configs() -> list:
+    """
+    Locate all config.json files under the standard WF2 documents path.
+    Pattern: %USERPROFILE%/Documents/My Games/Wreckfest 2/<APP_ID>/savegame/telemetry/config.json
+    """
+    base = os.path.expandvars(r"%USERPROFILE%\Documents\My Games\Wreckfest 2")
+    pattern = os.path.join(base, "*", "savegame", "telemetry", "config.json")
+    return glob.glob(pattern)
+
+def is_game_running() -> bool:
+    """Return True if Wreckfest2.exe process is running."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/FI", "IMAGENAME eq Wreckfest2.exe", "/NH"],
+            text=True,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW — no console flash
+        )
+        return "Wreckfest2.exe" in out
+    except Exception:
+        return False
+
+def check_and_patch_telemetry_config(udp_port: int) -> bool:
+    """
+    Find game telemetry config.json, check that UDP is enabled and port matches.
+    If not — prompt user to patch. Returns True if everything is OK to proceed.
+    """
+    configs = find_telemetry_configs()
+    if not configs:
+        print(
+            "[CFG] Could not find Wreckfest 2 telemetry config.json\n"
+            "      Expected location:\n"
+            "      %USERPROFILE%\\Documents\\My Games\\Wreckfest 2\\<STEAM_APP_ID>\\savegame\\telemetry\\config.json\n"
+            "      Please create or check it manually."
+        )
+        return True   # don't block startup — maybe user knows what they're doing
+    ok = True
+    for path in configs:
+        print(f"[CFG] Checking {path}")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"[CFG] Cannot read config: {e}")
+            continue
+        udp_section = data.get("udp", [{}])[0]
+        enabled     = int(udp_section.get("enabled", 0))
+        cfg_port    = int(udp_section.get("port", 0))
+        issues = [ ]
+        if not enabled:
+            issues.append(("enabled", 0, 1))
+        if cfg_port != udp_port:
+            issues.append(("port", cfg_port, udp_port))
+        if not issues:
+            print(f"[CFG] OK — UDP enabled, port {cfg_port}")
+            continue
+        # Describe what's wrong
+        print(f"[CFG] Issues found:")
+        for field, cur, want in issues:
+            print(f"      {field}: current={cur!r}  expected={want!r}")
+            pass
+        answer = input("[CFG] Patch this file automatically? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes"):
+            for field, _, want in issues:
+                udp_section[field] = str(want) if field == "port" else want
+                pass
+            data["udp"][0] = udp_section
+            try:
+                with open(path, "w", encoding="utf-8") as file:
+                    json.dump(data, file, indent=4)
+                print(f"[CFG] Patched OK.")
+            except Exception as e:
+                print(f"[CFG] Failed to write: {e}")
+                ok = False
+                continue
+            if is_game_running():
+                print(
+                    "[CFG] Wreckfest 2 is currently running.\n"
+                    "      Please restart the game for telemetry changes to take effect,\n"
+                    "      then run this script again."
+                )
+                ok = False
+        else:
+            print("[CFG] Skipped. Telemetry may not work correctly.")
+            ok = False
+    return ok
+
+
 def main():
     op = OptionParser()
     op.add_option("-c", "--config", dest="config",  default=DEFAULT_CONFIG_PATH, help=f"Config YAML file (default: {DEFAULT_CONFIG_PATH})")
@@ -590,7 +681,12 @@ def main():
             f"      print cooldown       : {SlippageResearcher.PRINT_COOLDOWN_S}s\n"
         )
 
-    receiver = WF2TelemetryReceiver(port = cfg.get("udp_port", 23123))
+    udp_port = cfg.get("udp_port", 23123)
+    if not check_and_patch_telemetry_config(udp_port):
+        print("[WF2] Fix telemetry config and restart. Exiting.")
+        return
+
+    receiver = WF2TelemetryReceiver(port=udp_port)
     print(f"[WF2] Auto-gear active  {scfg.describe()}")
     print(f"[WF2] Ctrl+C to quit\n")
     
