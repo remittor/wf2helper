@@ -284,16 +284,16 @@ class LeaderboardOverlay(BaseOverlay):
 
         track = snap.track_name[:30] if snap.track_name else "---"
         line(seg(f" {track}", "header"))
-        line(seg(f" {'P':>2}  {'Name':<16} {'Car':<12} {'Lap':>5}  {'Δ to you':>8}  {'HP':>3}  St", "header"))
+        line(seg(f" {'P':>2}  {'Name':<12} {'Car':<8} {'Lap':>5}  {'Δ to you':>8}  {'HP':>3}  St", "header"))
 
         rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
         for row in rows:
             lap_str  = f"{row.lap}/{snap.lap_total}" if snap.lap_total else str(row.lap)
-            name_str = row.name[:16]     if row.name     else f"P{row.index:02d}"
-            car_str  = row.car_name[:12] if row.car_name else ""
+            name_str = row.name[:12]     if row.name     else f"P{row.index:02d}"
+            car_str  = row.car_name[:8] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
             tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
-            line(seg(f" {pos_str}  {name_str:<16} {car_str:<12} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
+            line(seg(f" {pos_str}  {name_str:<12} {car_str:<8} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
 
         return lines[:self.max_rows]
 
