@@ -11,13 +11,13 @@ overlays:
         y: 400             # screen position, pixels from top
         alpha: 0.82        # transparency: 0.0 = invisible, 1.0 = opaque
         transparent: true   # true = fully transparent background (Windows only)
-        chroma_key: "#00ff01"
-        bg: "#1a1a1a"        # background colour (ignored when transparent: true)
-        font_size: 10
-        font: "Courier New"
-        bold: true
-        shadow: "#000000"
-        fg: "#f0f0f0"
+        chroma_key: "#000001"
+        bg: "#000001"        # background colour (ignored when transparent: true)
+        font_size: 9
+        font: "Fixedsys"
+        bold: false
+        shadow: "#000001"
+        fg: "#ffffff"
         fg_player: "#ffdd44"
         fg_dnf: "#888888"
     advinfo:
@@ -25,14 +25,14 @@ overlays:
         y: 820
         alpha: 0.82
         transparent: true
-        chroma_key: "#00ff01"
-        bg: "#1a1a1a"
-        font_size: 10
-        font: "Courier New"
-        bold: true
-        shadow: "#000000"
-        fg: "#f0f0f0"
-        fg_player: "#ffdd44"  # used for race timer
+        chroma_key: "#000001"
+        bg: "#000001"
+        font_size: 9
+        font: "Fixedsys"
+        bold: false
+        shadow: "#000001"
+        fg: "#ffffff"
+        fg_player: "#ffffff"  # used for race timer
 
 auto_shifter:
     landing_settle_ms: 400  # wait after landing before shifting, ms

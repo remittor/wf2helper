@@ -702,8 +702,8 @@ def main():
                 slip_res.reset()
             if lb_state:
                 lb_state.reset()
-            if adv_state:
-                adv_state.reset()
+            #if adv_state:
+            #    adv_state.reset()
             current_car = ""
 
         if monitor.paused:
@@ -735,7 +735,8 @@ def main():
 
         if adv_ov and adv_state:
             tr = shifter.traction.state if opt.gearauto else ""
-            adv_ov.push(adv_state.snapshot_from_main(frame, traction_state=tr))
+            adv_state.renew_from_main(frame, traction_state = tr)
+            adv_ov.push(adv_state.get_data())
 
         stats.show_stat(frame, forced = shifted > 0)
 

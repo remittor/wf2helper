@@ -34,6 +34,7 @@ import threading
 import queue
 import time
 from dataclasses import dataclass, field
+from copy import deepcopy
 
 from wf2telemetry import *
 
@@ -119,7 +120,7 @@ class BaseOverlay:
             root   = root,
             family = ov["font"],
             size   = ov["font_size"],
-            weight = "bold" if ov["bold"] else "",
+            weight = "bold" if ov["bold"] else "normal",
         )
         self.cw   = self.font.measure("W")
         self.lh   = self.font.metrics("linespace")
@@ -194,7 +195,7 @@ class BaseOverlay:
             "player": ov.get("fg_player", "#ffdd44"),
             "hi":     ov.get("fg_player", "#ffdd44"),
             "dnf":    ov.get("fg_dnf",    "#888888"),
-            "label":  "#777777",
+            "label":  "#f6f6f6",
             "warn":   "#ff6644",
             "good":   "#44dd88",
             "air":    "#44bbff",
@@ -297,9 +298,20 @@ class LeaderboardOverlay(BaseOverlay):
 
 @dataclass
 class AdvInfoSnapshot:
-    race_time_ms:   int   = 0
-    race_finished:  bool  = False
-    frozen_time_ms: int   = 0
+    ses_status     : int   = 0     # see enum SessionStatus
+    race_inited    : bool  = False # set True after first SESSION_STATUS_COUNTDOWN
+    race_started   : bool  = False # set True after first SESSION_STATUS_RACING
+    race_stopped   : bool  = False
+    race_finished  : bool  = False
+
+    start_TIME_s   : float = 0.0   # real time of race_started set True
+    start_time_ms  : int   = 0
+    race_TIME_ms   : int   = 0
+    race_time_ms   : int   = 0
+    
+    lap_time_ms    : int   = 0
+    lap_time_best  : int   = 0
+    lap_progress   : float = 0.0
 
     throttle:   float = 0.0
     brake:      float = 0.0
@@ -317,6 +329,14 @@ class AdvInfoSnapshot:
     traction_state: str = ""
     health:         int = 100
 
+    # Sector info
+    sector_count   : int   = 0     # 1, 2 or 3
+    sector_fract   : tuple = (0.0, 1.0)   # (fract1, fract2) boundaries
+    # Current-lap sector times (ms). 0 = not yet completed this lap.
+    sect_cur       : tuple = (0, 0, 0)   # S1, S2, S3 for current lap
+    # Best-ever sector times across all laps (from telemetry)
+    sect_best      : tuple = (0, 0, 0)   # sectorTimeBest1/2/3
+
     tire_slip: tuple = (0.0, 0.0, 0.0, 0.0)
     tire_temp: tuple = (0.0, 0.0, 0.0, 0.0)
     tire_load: tuple = (0.0, 0.0, 0.0, 0.0)
@@ -331,19 +351,6 @@ class AdvInfoOverlay(BaseOverlay):
     def __init__(self, ov: dict):
         super().__init__(ov, "WF2 AdvInfo")
 
-    @staticmethod
-    def bar(value: float, width: int = 12, full: str = "█", empty: str = "░") -> str:
-        n = round(max(0.0, min(1.0, value)) * width)
-        return full * n + empty * (width - n)
-
-    @staticmethod
-    def fmt_time(ms: int) -> str:
-        ms   = max(0, ms)
-        mins = ms // 60000
-        secs = (ms % 60000) // 1000
-        frac = ms % 1000
-        return f"{mins:02d}:{secs:02d}.{frac:03d}"
-
     def render(self, s_data: AdvInfoSnapshot) -> list:
         s = self.gen_segment  # segment builder
         d = s_data
@@ -352,23 +359,58 @@ class AdvInfoOverlay(BaseOverlay):
         def line(*segs):
             lines.append(list(segs))
 
+        def bar(value: float, width: int = 16, full: str = "█", empty: str = "░") -> str:
+            n = round(max(0.0, min(1.0, value)) * width)
+            return full * n + empty * (width - n)
+
+        def fmt_time(ms: int) -> str:
+            ms   = max(0, ms)
+            mins = ms // 60000
+            secs = (ms % 60000) // 1000
+            frac = ms % 1000
+            return f"{mins:02d}:{secs:02d}.{frac:03d}"
+
+        def fmt_s(ms: int, n: int) -> str:
+            return fmt_time(ms) if ms > 0 else "--:--.---"
+
         # Race timer
-        display_ms = d.frozen_time_ms if d.race_finished else d.race_time_ms
-        fin_tag    = "good" if d.race_finished else "hi"
+        fin_tag = "good" if d.race_finished else "hi"
         fin_suffix = "  FINISH" if d.race_finished else ""
-        line(s(" TIME ", "label"), s(self.fmt_time(display_ms), fin_tag), s(fin_suffix, "good"))
+        line(s("TIME ", "label"), s(fmt_time(d.race_time_ms), fin_tag), s(fin_suffix, "good"))
+        line(s("time ", "label"), s(fmt_time(d.race_TIME_ms), "hi"))
+
+        if d.sector_count > 0:
+            # Current sector indicator: mark active sector with tag "hi"
+            p = d.lap_progress
+            cur_sect = 1 if p < d.sector_fract[0] else (2 if p < d.sector_fract[1] else 3)
+
+            def stag(n: int) -> str:
+                return "hi" if n == cur_sect else ""
+
+            n = d.sector_count
+            s1c, s2c, s3c = d.sect_cur
+            s1b, s2b, s3b = d.sect_best
+            if n == 1:
+                line(s("SECT ", "label"), s(fmt_s(s1c, 1), stag(1)))
+                line(s("BEST ", "label"), s(fmt_s(s1b, 1), "header"))
+            elif n == 2:
+                line(s("SECT ", "label"), s(fmt_s(s1c, 1), stag(1)),  s("  ", ""), s(fmt_s(s2c, 2), stag(2)))
+                line(s("BEST ", "label"), s(fmt_s(s1b, 1), "header"), s("  ", ""), s(fmt_s(s2b, 2), "header"))
+            else:  # 3 sectors
+                line(s("SECT ", "label"), s(fmt_s(s1c, 1), stag(1)),  s("  ", ""), s(fmt_s(s2c, 2), stag(2)),  s("  ", ""), s(fmt_s(s3c, 3), stag(3)))
+                line(s("BEST ", "label"), s(fmt_s(s1b, 1), "header"), s("  ", ""), s(fmt_s(s2b, 2), "header"), s("  ", ""), s(fmt_s(s3b, 3), "header"))
+
+        line(s("LAP TIME ", "label"), s(fmt_time(d.lap_time_ms), "hi"))
+        line(s("LAP BEST ", "label"), s(fmt_time(d.lap_time_best), "good"))
 
         # Inputs
         line(s(" ──────────────────────────────", "label"))
-        bar_w = 20
-        line(s("THR ", "label"), s(self.bar(d.throttle,  bar_w), "good"), s(f" {d.throttle *100:5.1f}%"))
-        line(s("BRK ", "label"), s(self.bar(d.brake,     bar_w), "warn"), s(f" {d.brake    *100:5.1f}%"))
-        if d.clutch > 0.01:
-            line(s("CLT ", "label"), s(self.bar(d.clutch,    bar_w)),     s(f" {d.clutch   *100:5.1f}%"))
-        if d.handbrake > 0.01:
-            line(s("HBR ", "label"), s(self.bar(d.handbrake, bar_w), "warn"), s(f" {d.handbrake*100:5.1f}%"))
+        line(s("THR ", "label"), s(bar(d.throttle), "good"),  s(f" {d.throttle *100:5.1f}%"))
+        line(s("BRK ", "label"), s(bar(d.brake   ), "warn"),  s(f" {d.brake    *100:5.1f}%"))
+        line(s("CLT ", "label"), s(bar(d.clutch)          ),  s(f" {d.clutch   *100:5.1f}%"))
+        line(s("HBR ", "label"), s(bar(d.handbrake), "warn"), s(f" {d.handbrake*100:5.1f}%"))
         steer_c = (d.steering + 1.0) / 2.0
-        line(s("STR ", "label"), s(self.bar(steer_c,     bar_w)),         s(f" {d.steering *100:+6.1f}%"))
+        line(s("STR ", "label"), s(bar(steer_c)),             s(f"{d.steering *100:+6.1f}%"))
 
         # Engine
         line(s(" ──────────────────────────────", "label"))
@@ -376,10 +418,10 @@ class AdvInfoOverlay(BaseOverlay):
         t_eng = d.temp_block - 273.15
         t_wat = d.temp_water - 273.15
         t_eng_col = "warn" if t_eng > 120 else ""
-        t_wat_col = "warn" if t_eng > 110 else ""
+        t_wat_col = "warn" if t_wat > 110 else ""
         extinfo = s("  ⚠  MISFIRE", "warn") if d.misfiring else None
-        line(s("ENG ", "label"), s(f"{t_eng:6.1f}°C", t_eng_col), s("     WAT ", "label"), s(f"{t_wat:6.1f}°C", t_wat_col))
-        line(s("OIL ", "label"), s(f"{d.pressure_oil:6.1f} kPa", "warn" if d.pressure_oil < 100 else ""), extinfo)
+        line(s("ENG ", "label"), s(f"{t_eng:7.1f}°C", t_eng_col), s("    WAT ", "label"), s(f"{t_wat:7.1f}°C", t_wat_col))
+        line(s("OIL ", "label"), s(f"{d.pressure_oil:7.1f} kPa", "warn" if d.pressure_oil < 100 else ""), extinfo)
 
         # Traction
         tr = d.traction_state or "NORMAL"
@@ -418,7 +460,7 @@ class AdvInfoOverlay(BaseOverlay):
         line(s(" ──────────────────────────────", "label"))
         hp_tag = "warn" if d.health < 40 else ("good" if d.health > 80 else "")
         line(s(" HP   ", "label"),
-             s(self.bar(d.health / 100, 12), hp_tag),
+             s(bar(d.health / 100, 12), hp_tag),
              s(f" {d.health:3d}%", hp_tag))
         '''
         return lines
@@ -503,53 +545,101 @@ class AdvInfoState:
         self.reset()
 
     def reset(self) -> None:
-        self.race_finished:  bool = False
-        self.frozen_time_ms: int  = 0
+        self.data = AdvInfoSnapshot()
+        return self.data
 
-    def snapshot_from_main(self, pkt, traction_state: str = "") -> AdvInfoSnapshot:
-        hdr   = pkt.header
-        eng   = pkt.carPlayer.engine
-        inp   = pkt.carPlayer.input
-        lb    = pkt.participantPlayerLeaderboard
+    def get_data(self):
+        return deepcopy(self.data)
+
+    def renew_from_main(self, pkt, traction_state: str = "") -> int:
+        data = self.data
+        hdr  = pkt.header
+        eng  = pkt.carPlayer.engine
+        inp  = pkt.carPlayer.input
+        lb   = pkt.participantPlayerLeaderboard
+        tm   = pkt.participantPlayerTiming
+        tms  = pkt.participantPlayerTimingSectors
+        ses  = pkt.session
         tires = pkt.carPlayer.tires
 
         race_time_ms = max(0, hdr.raceTime)
-        finished = (lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS)
+        now = time.monotonic()
+        need_update = False
 
-        if finished and not self.race_finished:
-            self.race_finished  = True
-            self.frozen_time_ms = race_time_ms
-        elif not finished and self.race_finished:
-            self.race_finished  = False
-            self.frozen_time_ms = 0
+        if not data.race_inited:
+            if ses.status == SESSION_STATUS_COUNTDOWN:
+                data = self.reset()
+                data.ses_status = ses.status   # see enum SessionStatus
+                data.sector_count = ses.sectorCount
+                data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
+                data.race_inited = True
+            return 0
 
-        return AdvInfoSnapshot(
-            race_time_ms   = race_time_ms,
-            race_finished  = self.race_finished,
-            frozen_time_ms = self.frozen_time_ms,
+        if not data.race_started and ses.status == SESSION_STATUS_RACING:
+            data.race_started = True
+            data.ses_status = ses.status
+            data.start_TIME_s = now
+            data.start_time_ms = race_time_ms
+            print(f'race_time_ms = {race_time_ms} ms  status = 0x{pkt.playerStatusFlags:02X}')
 
-            throttle  = inp.throttle,
-            brake     = inp.brake,
-            clutch    = inp.clutch,
-            handbrake = inp.handbrake,
-            steering  = inp.steering,
+        if data.race_started and not data.race_stopped and ses.status != SESSION_STATUS_COUNTDOWN and ses.status != SESSION_STATUS_RACING:
+            data.race_stopped = True
+            data.race_started = False
+            data.race_inited  = False
 
-            torque        = eng.torque,
-            power         = eng.power,
-            temp_block    = eng.tempBlock,
-            temp_water    = eng.tempWater,
-            pressure_oil  = eng.pressureOil,
-            misfiring     = eng.misfiring,
+        if not data.race_finished and lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS:
+            data.race_started = False
+            data.race_finished = True
+            need_update = True
 
-            traction_state = traction_state,
-            health         = lb.health,
+        if data.race_started:
+            need_update = True
 
-            tire_slip = tuple(tires[i].slipRatio                 for i in range(4)),
-            tire_temp = tuple(tires[i].temperatureTread - 273.15 for i in range(4)),
-            tire_load = tuple(tires[i].loadVertical              for i in range(4)),
-            tire_surf = tuple(tires[i].surfaceType               for i in range(4)),
-            susp_norm = tuple(tires[i].suspensionDispNorm        for i in range(4)),
-        )
+        if not need_update:
+            return -1
+            
+        data.race_time_ms = race_time_ms
+        data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
+
+        if data.lap_time_ms > tm.lapTimeCurrent:
+            # new lap started
+            pass
+        
+        data.lap_time_ms = tm.lapTimeCurrent
+        data.lap_time_best = tm.lapTimeBest
+        data.lap_progress = tm.lapProgress
+
+        s1 = tms.sectorTimeCurrentLap1 
+        s2 = tms.sectorTimeCurrentLap2
+        if data.sector_count >= 3 and tm.lapProgress >= data.sector_fract[1]:
+            s3 = max(0, tm.lapTimeCurrent - s1 - s2)
+        else:
+            s3 = 0
+        data.sect_cur  = ( s1, s2, s3)
+        data.sect_best = ( tms.sectorTimeBest1, tms.sectorTimeBest2, tms.sectorTimeBest3 )
+
+        data.throttle       = inp.throttle
+        data.brake          = inp.brake
+        data.clutch         = inp.clutch
+        data.handbrake      = inp.handbrake
+        data.steering       = inp.steering
+
+        data.torque         = eng.torque
+        data.power          = eng.power
+        data.temp_block     = eng.tempBlock
+        data.temp_water     = eng.tempWater
+        data.pressure_oil   = eng.pressureOil
+        data.misfiring      = eng.misfiring
+
+        data.traction_state = traction_state
+        data.health         = lb.health
+
+        data.tire_slip = tuple(tires[i].slipRatio                 for i in range(4))
+        data.tire_temp = tuple(tires[i].temperatureTread - 273.15 for i in range(4))
+        data.tire_load = tuple(tires[i].loadVertical              for i in range(4))
+        data.tire_surf = tuple(tires[i].surfaceType               for i in range(4))
+        data.susp_norm = tuple(tires[i].suspensionDispNorm        for i in range(4))
+        return 1
 
 
 def create_overlays(cfg: dict):

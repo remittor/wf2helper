@@ -50,6 +50,12 @@ PARTICIPANT_STATUS_DNF_RETIRED      = 6
 PARTICIPANT_STATUS_DNF_TIMEOUT      = 7
 PARTICIPANT_STATUS_DNF_WRECKED      = 8
 
+PLAYER_STATUS_IN_RACE         = (1 << 0)   # Player's car is in race / on track
+PLAYER_STATUS_CAR_DRIVABLE    = (1 << 1)   # Player's car is drivable
+PLAYER_STATUS_PHYSICS_RUNNING = (1 << 2)   # In race AND not paused
+PLAYER_STATUS_CONTROL_PLAYER  = (1 << 3)   # Player is driving player's car
+PLAYER_STATUS_CONTROL_AI      = (1 << 4)   # AI is driving player's car
+
 
 # --- Base: pack=1 mirrors #pragma pack(push, 1) 
 class _BaseStruct(Structure):
