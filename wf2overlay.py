@@ -25,7 +25,6 @@ Config (wf2hlp.yaml):
 Appearance keys (same for both sections):
     x, y, alpha, font, font_size, bg, fg, fg_player, fg_dnf,
     shadow, transparent, chroma_key
-    max_rows   — leaderboard only
 """
 
 import tkinter as tk
@@ -38,28 +37,45 @@ from copy import deepcopy
 
 from wf2telemetry import *
 
-OV_DEFAULTS = dict(
+OV_CFG_DEFAULTS = dict(
+    max_rows    = 16,
     x           = 20,
-    y           = 80,
+    y           = 400,
     alpha       = 0.82,
-    transparent = False,
-    chroma_key  = "#010101",
-    bg          = "#1a1a1a",
-    font        = "Courier New",
-    font_size   = 11,
-    bold        = True,
+    transparent = True,
+    chroma_key  = "#000005",
+    bg          = "#000001",
+    font        = "Fixedsys",
+    font_size   = 9,
+    bold        = False,
     shadow      = "#000000",    # drop-shadow colour
-    fg          = "#e0e0e0",
+    fg          = "#ffffff",
     fg_player   = "#ffdd44",
     fg_dnf      = "#888888",
 )
 
-def ov_cfg(section: dict) -> dict:
-    d = dict(OV_DEFAULTS)
-    d.update(section)
-    if d["transparent"]:
-        d["bg"] = d["chroma_key"]
-    return d
+def get_ov_cfg(section: dict) -> dict:
+    cfg = dict(OV_CFG_DEFAULTS)
+    cfg.update(section)
+    if cfg["transparent"]:
+        cfg["bg"] = cfg["chroma_key"]
+    return cfg
+
+def get_color(ov_cfg, tag: str) -> str:
+    if tag.startswith('#'):
+        return tag
+    TABLE = {
+        "":       ov_cfg.get("fg",        "#ffffff"),
+        "header": "#b8b8b8",
+        "player": ov_cfg.get("fg_player", "#ffdd44"),
+        "hi":     ov_cfg.get("fg_player", "#ffdd44"),
+        "dnf":    ov_cfg.get("fg_dnf",    "#aaaaaa"),
+        "label":  "#f3f3f3",
+        "warn":   "#ff6644",
+        "good":   "#44dd88",
+        "air":    "#44bbff",
+    }
+    return TABLE.get(tag, ov_cfg.get("fg", "#e0e0e0"))
 
 
 class BaseOverlay:
@@ -187,24 +203,9 @@ class BaseOverlay:
         c.configure(width=w, height=h)
         self.root.geometry(f"{w}x{h}")
 
-    def get_color(self, tag: str) -> str:
-        ov = self.ov
-        TABLE = {
-            "":       ov.get("fg",        "#e0e0e0"),
-            "header": "#aaaaaa",
-            "player": ov.get("fg_player", "#ffdd44"),
-            "hi":     ov.get("fg_player", "#ffdd44"),
-            "dnf":    ov.get("fg_dnf",    "#888888"),
-            "label":  "#f6f6f6",
-            "warn":   "#ff6644",
-            "good":   "#44dd88",
-            "air":    "#44bbff",
-        }
-        return TABLE.get(tag, ov.get("fg", "#e0e0e0"))
-
     def gen_segment(self, text: str, tag: str = "") -> tuple:
         """Build one segment: (text, colour)."""
-        return (text, self.get_color(tag))
+        return (text, get_color(self.ov, tag))
 
     def render(self, data) -> list:
         raise NotImplementedError
@@ -253,7 +254,7 @@ class ParticipantRow:
         Negative (-) = this participant is ahead of the player.
         Blank for the player's own row."""
         if self.is_player:
-            return "  ←YOU→ "
+            return "  <YOU> "
         ms   = abs(self.delta_to_player)
         sign = "+" if self.delta_to_player >= 0 else "-"
         s    = ms // 1000
@@ -271,7 +272,7 @@ class LeaderboardSnapshot:
 
 class LeaderboardOverlay(BaseOverlay):
     def __init__(self, ov: dict):
-        self.max_rows = ov.get("max_rows", 24)
+        self.max_rows = ov.get("max_rows", 16)
         super().__init__(ov, "WF2 Leaderboard")
 
     def render(self, snap: LeaderboardSnapshot) -> list:
@@ -286,14 +287,15 @@ class LeaderboardOverlay(BaseOverlay):
         line(seg(f" {'P':>2}  {'Name':<16} {'Car':<12} {'Lap':>5}  {'Δ to you':>8}  {'HP':>3}  St", "header"))
 
         rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
-        for row in rows[:self.max_rows]:
+        for row in rows:
             lap_str  = f"{row.lap}/{snap.lap_total}" if snap.lap_total else str(row.lap)
             name_str = row.name[:16]     if row.name     else f"P{row.index:02d}"
             car_str  = row.car_name[:12] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
             tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
             line(seg(f" {pos_str}  {name_str:<16} {car_str:<12} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
-        return lines
+
+        return lines[:self.max_rows]
 
 
 @dataclass
@@ -349,6 +351,7 @@ WF2_SURF = { 0: " --- ", 1: " AIR ", 2: " GND ", 3: " GRS ", 4: " GVL ", 5: " MU
 
 class AdvInfoOverlay(BaseOverlay):
     def __init__(self, ov: dict):
+        self.max_rows = ov.get("max_rows", 16)
         super().__init__(ov, "WF2 AdvInfo")
 
     def render(self, s_data: AdvInfoSnapshot) -> list:
@@ -463,7 +466,7 @@ class AdvInfoOverlay(BaseOverlay):
              s(bar(d.health / 100, 12), hp_tag),
              s(f" {d.health:3d}%", hp_tag))
         '''
-        return lines
+        return lines[:self.max_rows]
 
 
 class LeaderboardState:
@@ -647,15 +650,15 @@ def create_overlays(cfg: dict):
     lb_ov  = None
     adv_ov = None
 
-    lb_sec = ovs.get("leaderboard")
-    if lb_sec is not None:
-        resolved = ov_cfg(lb_sec)
-        resolved["max_rows"] = lb_sec.get("max_rows", 16)
-        lb_ov = LeaderboardOverlay(resolved)
+    lb_ov_cfg = ovs.get("leaderboard")
+    if lb_ov_cfg is not None:
+        lb_ov_cfg = get_ov_cfg(lb_ov_cfg)
+        lb_ov = LeaderboardOverlay(lb_ov_cfg)
 
-    adv_sec = ovs.get("advinfo")
-    if adv_sec is not None:
-        adv_ov = AdvInfoOverlay(ov_cfg(adv_sec))
+    adv_ov_cfg = ovs.get("advinfo")
+    if adv_ov_cfg is not None:
+        adv_ov_cfg = get_ov_cfg(adv_ov_cfg)
+        adv_ov = AdvInfoOverlay(adv_ov_cfg)
 
     return lb_ov, adv_ov
 
