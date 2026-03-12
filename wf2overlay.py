@@ -362,8 +362,19 @@ class AdvInfoOverlay(BaseOverlay):
         def line(*segs):
             lines.append(list(segs))
 
-        def bar(value: float, width: int = 16, full: str = "█", empty: str = "░") -> str:
-            n = round(max(0.0, min(1.0, value)) * width)
+        def bar(value: float, width: int = 16, full: str = "█", empty: str = "░", s: int = 0) -> str:
+            if s == -1:
+                value = max(-1.0, min(1.0, value))
+                width = width // 2
+                if value >= 0.0:
+                    n = round(value * width)
+                    return empty * width + full * n + empty * (width - n)
+                if value < 0.0:
+                    n = round(abs(value) * width)
+                    return empty * (width - n) + full * n + empty * width
+                
+            value = max(0.0, min(1.0, value))
+            n = round(value * width)
             return full * n + empty * (width - n)
 
         def fmt_time(ms: int) -> str:
@@ -412,8 +423,7 @@ class AdvInfoOverlay(BaseOverlay):
         line(s("BRK ", "label"), s(bar(d.brake   ), "warn"),  s(f" {d.brake    *100:5.1f}%"))
         line(s("CLT ", "label"), s(bar(d.clutch)          ),  s(f" {d.clutch   *100:5.1f}%"))
         line(s("HBR ", "label"), s(bar(d.handbrake), "warn"), s(f" {d.handbrake*100:5.1f}%"))
-        steer_c = (d.steering + 1.0) / 2.0
-        line(s("STR ", "label"), s(bar(steer_c)),             s(f"{d.steering *100:+6.1f}%"))
+        line(s("STR ", "label"), s(bar(d.steering, s = -1)),  s( f"{d.steering*100:+6.1f}%"))
 
         # Engine
         line(s(" ──────────────────────────────", "label"))
@@ -567,19 +577,18 @@ class AdvInfoState:
 
         race_time_ms = max(0, hdr.raceTime)
         now = time.monotonic()
-        need_update = False
+        need_update_times = False
 
-        if not data.race_inited:
-            if ses.status == SESSION_STATUS_COUNTDOWN:
-                data = self.reset()
-                data.ses_status = ses.status   # see enum SessionStatus
-                data.sector_count = ses.sectorCount
-                data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
-                data.race_inited = True
-            return 0
+        if not data.race_inited and ses.status == SESSION_STATUS_COUNTDOWN:
+            data = self.reset()
+            data.ses_status = ses.status   # see enum SessionStatus
+            data.sector_count = ses.sectorCount
+            data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
+            data.race_inited = True
 
-        if not data.race_started and ses.status == SESSION_STATUS_RACING:
+        if not data.race_started and data.race_inited and ses.status == SESSION_STATUS_RACING:
             data.race_started = True
+            data.race_finished = False
             data.ses_status = ses.status
             data.start_TIME_s = now
             data.start_time_ms = race_time_ms
@@ -593,33 +602,31 @@ class AdvInfoState:
         if not data.race_finished and lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS:
             data.race_started = False
             data.race_finished = True
-            need_update = True
+            need_update_times = True
 
         if data.race_started:
-            need_update = True
+            need_update_times = True
 
-        if not need_update:
-            return -1
+        if need_update_times:
+            data.race_time_ms = race_time_ms
+            data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
+
+            if data.lap_time_ms > tm.lapTimeCurrent:
+                # new lap started
+                pass
             
-        data.race_time_ms = race_time_ms
-        data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
+            data.lap_time_ms = tm.lapTimeCurrent
+            data.lap_time_best = tm.lapTimeBest
+            data.lap_progress = tm.lapProgress
 
-        if data.lap_time_ms > tm.lapTimeCurrent:
-            # new lap started
-            pass
-        
-        data.lap_time_ms = tm.lapTimeCurrent
-        data.lap_time_best = tm.lapTimeBest
-        data.lap_progress = tm.lapProgress
-
-        s1 = tms.sectorTimeCurrentLap1 
-        s2 = tms.sectorTimeCurrentLap2
-        if data.sector_count >= 3 and tm.lapProgress >= data.sector_fract[1]:
-            s3 = max(0, tm.lapTimeCurrent - s1 - s2)
-        else:
-            s3 = 0
-        data.sect_cur  = ( s1, s2, s3)
-        data.sect_best = ( tms.sectorTimeBest1, tms.sectorTimeBest2, tms.sectorTimeBest3 )
+            s1 = tms.sectorTimeCurrentLap1 
+            s2 = tms.sectorTimeCurrentLap2
+            if data.sector_count >= 3 and tm.lapProgress >= data.sector_fract[1]:
+                s3 = max(0, tm.lapTimeCurrent - s1 - s2)
+            else:
+                s3 = 0
+            data.sect_cur  = ( s1, s2, s3)
+            data.sect_best = ( tms.sectorTimeBest1, tms.sectorTimeBest2, tms.sectorTimeBest3 )
 
         data.throttle       = inp.throttle
         data.brake          = inp.brake
