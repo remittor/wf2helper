@@ -104,16 +104,54 @@ class PlayFabClient:
     # Leaderboard API
     # ------------------------------------------------------------------
 
-    def get_leaderboard(self, name: str, max_results: int = 100) -> list[dict]:
-        """Fetch top N entries from a named leaderboard."""
+    PF_PAGE_SIZE_MAX = 100
+    PF_MAX_RESULTS   = 99999
+
+    def get_leaderboard_page(self, name: str, starting_position: int = 1, page_size: int = 100) -> tuple[list[dict], int]:
+        """
+        Fetch a single page of leaderboard entries.
+        starting_position: 1-based rank offset to start from.
+        page_size:         number of entries per page (max 100).
+        Returns (rankings_list, total_entry_count).
+        """
         self.require_auth()
-        payload = { "LeaderboardName": name, "PageSize": max(1, max_results) }
-        resp = self.post("/Leaderboard/GetLeaderboard", payload)
+        resp = self.post(
+            "/Leaderboard/GetLeaderboard",
+            {
+                "LeaderboardName":  name,
+                "PageSize":         min(max(1, page_size), self.PF_PAGE_SIZE_MAX),
+                "StartingPosition": max(1, starting_position),
+            },
+        )
         if resp.get("status") != "OK":
             raise RuntimeError(f"GetLeaderboard failed: {resp}")
-        return resp["data"].get("Rankings", [ ])
+        data        = resp["data"]
+        rankings    = data.get("Rankings", [ ])
+        entry_count = data.get("EntryCount", 0)
+        return rankings, entry_count
 
-    def get_leaderboard_around_entity(self, name: str, entity_id: str | None = None, surrounding: int = 0) -> list[dict]:
+    def get_leaderboard(self, name: str, max_results: int = 100) -> list[dict]:
+        """
+        Fetch up to max_results entries from a leaderboard.
+        Automatically paginates when max_results > 100 (PlayFab page limit).
+        Hard limit: PF_MAX_RESULTS (99999) entries total.
+        """
+        self.require_auth()
+        max_results = min(max(1, max_results), self.PF_MAX_RESULTS)
+        all_entries : list[dict] = [ ]
+        starting_position = 1
+        while len(all_entries) < max_results:
+            remaining = max_results - len(all_entries)
+            page, entry_count = self.get_leaderboard_page(name, starting_position, page_size=100)
+            if not page:
+                break
+            all_entries.extend(page)
+            if len(all_entries) >= entry_count:
+                break  # fetched everything available
+            starting_position += len(page)
+        return all_entries
+
+    def get_leaderboard_around_entity(self, name: str, entity_id: str | None = None, surrounding: int = 0, max_retries = 0) -> list[dict]:
         """
         Fetch leaderboard entries centered on a specific entity.
         surrounding=0 returns only that entity's own entry.
@@ -130,6 +168,7 @@ class PlayFabClient:
                 },
                 "MaxSurroundingEntries": max(1, surrounding),
             },
+            max_retries = max_retries
         )
         if resp.get("status") != "OK":
             raise RuntimeError(f"GetLeaderboardAroundEntity failed: {resp}")
@@ -347,8 +386,30 @@ class WF2PlayFab:
     # Leaderboard queries
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def normalize_leaderboard_name(name: str) -> str:
+        """
+        Normalize a leaderboard name to full form.
+        If name does not start with "ce-", prepend it.
+        If name does not end with "-class_all", append it.
+        Examples:
+          "track01_1"              -> "ce-track01_1-class_all"
+          "ce-track01_1"           -> "ce-track01_1-class_all"
+          "ce-track01_1-class_all" -> "ce-track01_1-class_all"
+        """
+        if not name.startswith("ce-"):
+            name = "ce-" + name
+        if not name.endswith("-class_all"):
+            name = name + "-class_all"
+        return name
+
     def get_my_time(self, leaderboard_name: str, output_file: str | None = None) -> dict | None:
-        """Get current player's own entry from a leaderboard."""
+        """
+        Get current player's own entry from a leaderboard.
+        leaderboard_name is normalized automatically:
+          missing "ce-" prefix and/or "-class_all" suffix are added if absent.
+        """
+        leaderboard_name = self.normalize_leaderboard_name(leaderboard_name)
         entries = self.client.get_leaderboard_around_entity(leaderboard_name, entity_id = self.entity_id, surrounding = 0)
         entry = entries[0] if entries else None
         if output_file and entry:
@@ -387,10 +448,14 @@ class WF2PlayFab:
         return results
 
     def get_top(self, leaderboard_name: str, max_results: int = 100, output_file: str | None = None) -> list[dict]:
-        """Fetch top N entries from a leaderboard."""
+        """
+        Fetch up to max_results top entries from a leaderboard.
+        Automatically paginates for max_results > 100.
+        If output_file is given, saves results in compact leaderboard JSON format.
+        """
         entries = self.client.get_leaderboard(leaderboard_name, max_results)
         if output_file:
-            save_json(entries, output_file)
+            save_leaderboard_json(entries, output_file)
         return entries
 
 
@@ -399,12 +464,15 @@ class WF2PlayFab:
 # ----------------------------------------------------------------------
 
 def fmt_ms(score) -> str:
-    """Format milliseconds as mm:ss.mmm string."""
+    """Format milliseconds as [h:]mm:ss.mmm string."""
     try:
         ms     = int(score)
-        mins   = ms // 60000
+        hours  = ms // 3600000
+        mins   = (ms % 3600000) // 60000
         secs   = (ms % 60000) // 1000
         millis = ms % 1000
+        if hours > 0:
+            return f"{hours}:{mins:02d}:{secs:02d}.{millis:03d}"
         return f"{mins:02d}:{secs:02d}.{millis:03d}"
     except (ValueError, TypeError):
         return str(score)
@@ -414,6 +482,44 @@ def save_json(data, path: str):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
     print(f"[OK] Saved to {path}")
+
+
+def save_leaderboard_json(entries: list[dict], path: str):
+    """
+    Save leaderboard entries to a JSON file in compact per-line format.
+    Each entry occupies exactly one line. Rank keys are right-aligned to 5 digits.
+    Time field is right-aligned to 12 chars to accommodate "h:mm:ss.mmm" format.
+    Entity ID and display name are included on the same line.
+
+    Example output:
+    {
+        1: { "pid": "9E9E103296EC989E", "time":   "00:33.306", "name": "DavidFinalForm" },
+        2: { "pid": "87C3D31A778C08AF", "time":   "00:33.307", "name": "DnB" },
+    ...
+    99999: { "pid": "AAABBBCCC1112223", "time": "1:02:31.968", "name": "slowpoke" }
+    }
+    """
+    # Pre-compute max rank width (min 5 to align up to 99999)
+    max_rank = max((e.get("Rank", 0) for e in entries), default=0)
+    rank_w   = max(5, len(str(max_rank)))
+
+    # Time width: "h:mm:ss.mmm" = 11 chars, "mm:ss.mmm" = 9 chars -> pad to 11
+    time_w = 11
+
+    lines = ["{"]
+    for i, e in enumerate(entries):
+        rank  = e.get("Rank", i + 1)
+        score = '"' + fmt_ms(e.get("Scores", [0])[0]) + '"'
+        name  = (e.get("DisplayName") or "").replace('"', '\"')
+        eid   = '"' + e.get("Entity", { }).get("Id", "") + '"'
+        is_last = (i == len(entries) - 1)
+        comma   = "" if is_last else ","
+        lines.append(f'  {rank:{rank_w}}: {{ "pid": {eid:>18}, "time": {score:>13}, "name": "{name}" }}{comma}')
+    lines.append("}")
+    text = "\n".join(lines)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"[OK] Saved {len(entries)} entries to {path}")
 
 
 def print_entries(entries: list[dict]):
@@ -456,9 +562,10 @@ def cmd_my_time(args, wf2: WF2PlayFab):
 
 
 def cmd_top(args, wf2: WF2PlayFab):
-    """Fetch top N entries from a leaderboard."""
+    """Fetch top N entries from a leaderboard (auto-paginates above 100)."""
     entries = wf2.get_top(args.name, max_results=args.top, output_file=args.output)
-    print(f"\nLeaderboard: {args.name}  (top {len(entries)})")
+    pages   = (len(entries) + 99) // 100
+    print(f"\nLeaderboard: {args.name}  ({len(entries)} entries, {pages} page(s))")
     print_entries(entries)
 
 

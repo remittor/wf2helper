@@ -82,7 +82,7 @@ class BaseOverlay:
     """
     Always-on-top tkinter Canvas window in its own daemon thread.
 
-    _render(data) must return: list of lines.
+    render(data) must return: list of lines.
     Each line is a list of (text, color_hex) tuples — segments placed
     left-to-right in monospace columns.
 
