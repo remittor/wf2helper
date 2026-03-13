@@ -453,6 +453,7 @@ class WF2PlayFab:
         Automatically paginates for max_results > 100.
         If output_file is given, saves results in compact leaderboard JSON format.
         """
+        leaderboard_name = self.normalize_leaderboard_name(leaderboard_name)
         entries = self.client.get_leaderboard(leaderboard_name, max_results)
         if output_file:
             save_leaderboard_json(entries, output_file)
