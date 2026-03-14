@@ -328,6 +328,7 @@ class AdvInfoSnapshot:
     track_name     : str = ""
     pb_rank        : int = 0
     pb_time        : int = 0
+    pb_time_new    : int = 0
     wr_time        : int = 0
 
     start_TIME_s   : float = 0.0   # real time of race_started set True
@@ -434,8 +435,11 @@ class AdvInfoOverlay(BaseOverlay):
                 line(s("BEST ", "label"), s(fmt_s(s1b, 1), "header"), s("  ", ""), s(fmt_s(s2b, 2), "header"), s("  ", ""), s(fmt_s(s3b, 3), "header"))
 
         line(s("LAP TIME ", "label"), s(fmt_time(d.lap_time_ms), "hi"))
-        line(s("LAP BEST ", "label"), s(fmt_time(d.lap_time_best)))
-        line(s("LAP PB   ", "label"), s(fmt_time(d.pb_time), "good"), s(" RANK ", "label"), s(str(d.pb_rank) if d.pb_rank > 0 else ''))
+        lap_tag = "good" if d.pb_time_new > 0 else ""
+        lap_suffix = " [NEW PB]" if d.pb_time_new > 0 else ""
+        line(s("LAP BEST ", "label"), s(fmt_time(d.lap_time_best), lap_tag), s(lap_suffix, "good"))
+        rank_suffix = f' → ???' if d.pb_time_new > 0 else ""
+        line(s("LAP PB   ", "label"), s(fmt_time(d.pb_time), "good"), s(" RANK ", "label"), s(str(d.pb_rank) if d.pb_rank > 0 else ''), s(rank_suffix))
         line(s("LAP WR   ", "label"), s(fmt_time(d.wr_time), "good"))
 
         # Inputs
@@ -751,6 +755,9 @@ class AdvInfoState:
             data.lap_time_ms = tm.lapTimeCurrent
             data.lap_time_best = tm.lapTimeBest
             data.lap_progress = tm.lapProgress
+
+            if data.lap_time_best < data.pb_time and data.pb_time > 1:
+                data.pb_time_new = data.lap_time_best
 
             s1 = tms.sectorTimeCurrentLap1 
             s2 = tms.sectorTimeCurrentLap2
