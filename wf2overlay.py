@@ -324,6 +324,8 @@ class AdvInfoSnapshot:
     race_stopped   : bool  = False
     race_finished  : bool  = False
     
+    pkt_count_after_finish: int = 0
+    
     track_id       : str = ""
     track_name     : str = ""
     pb_rank        : int = 0
@@ -738,11 +740,18 @@ class AdvInfoState:
         if not data.race_finished and lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS:
             data.race_finished = True
             data.race_inited = False
+            data.pkt_count_after_finish = 0
             print('>>> race_finished')
             need_update_times = True
 
         if data.race_started and not data.race_stopped and not data.race_finished:
             need_update_times = True
+
+        if data.race_started and data.race_finished:
+            data.pkt_count_after_finish += 1
+            if data.pkt_count_after_finish <= 3*60:
+                if tm.lapTimeCurrent > 0:
+                    need_update_times = True
 
         if need_update_times:
             data.race_time_ms = race_time_ms
@@ -756,8 +765,12 @@ class AdvInfoState:
             data.lap_time_best = tm.lapTimeBest
             data.lap_progress = tm.lapProgress
 
-            if data.lap_time_best < data.pb_time and data.pb_time > 1:
-                data.pb_time_new = data.lap_time_best
+            if data.pb_time > 1:
+                if tm.lapTimeBest < data.pb_time and tm.lapTimeBest > 0:
+                    data.pb_time_new = tm.lapTimeBest
+                if tm.lapTimeCurrent < data.pb_time_new and tm.lapTimeCurrent > 0 and data.race_finished:
+                    data.pb_time_new = tm.lapTimeCurrent
+                    data.lap_time_best = data.pb_time_new
 
             s1 = tms.sectorTimeCurrentLap1 
             s2 = tms.sectorTimeCurrentLap2
