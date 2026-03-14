@@ -303,7 +303,7 @@ class LeaderboardOverlay(BaseOverlay):
             car_str  = row.car_name[:8] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
             tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
-            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f"{car_str:<8} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
+            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f" {car_str:<8} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
 
         return lines[:self.max_rows]
 
@@ -426,6 +426,7 @@ class AdvInfoOverlay(BaseOverlay):
                 line(s("BEST ", "label"), s(fmt_s(s1b, 1), "header"), s("  ", ""), s(fmt_s(s2b, 2), "header"), s("  ", ""), s(fmt_s(s3b, 3), "header"))
 
         line(s("LAP TIME ", "label"), s(fmt_time(d.lap_time_ms), "hi"))
+        line(s("LAP BEST ", "label"), s(fmt_time(d.lap_time_best)))
         line(s("LAP PB   ", "label"), s(fmt_time(d.pb_time), "good"), s(" RANK ", "label"), s(str(d.pb_rank) if d.pb_rank > 0 else ''))
         line(s("LAP WR   ", "label"), s(fmt_time(d.wr_time), "good"))
 
