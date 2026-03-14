@@ -310,9 +310,8 @@ class LeaderboardOverlay(BaseOverlay):
 
 @dataclass
 class AdvInfoSnapshot:
-    ses_status     : int   = 0     # see enum SessionStatus
-    race_inited    : bool  = False # set True after first SESSION_STATUS_COUNTDOWN
-    race_started   : bool  = False # set True after first SESSION_STATUS_RACING
+    race_inited    : bool  = False
+    race_started   : bool  = False
     race_stopped   : bool  = False
     race_finished  : bool  = False
     
@@ -396,7 +395,7 @@ class AdvInfoOverlay(BaseOverlay):
         def fmt_s(ms: int, n: int) -> str:
             return fmt_time(ms) if ms > 0 else "--:--.---"
 
-        line(s("TRACK: ", "label"), s(d.track_name[:28]))
+        line(s(d.track_name[:34]))
 
         # Race timer
         fin_tag = "good" if d.race_finished else "hi"
@@ -683,6 +682,10 @@ class AdvInfoState:
         tms  = pkt.participantPlayerTimingSectors
         ses  = pkt.session
         tires = pkt.carPlayer.tires
+        
+        s_status = ses.status              # see enum SessionStatus
+        g_status = hdr.statusFlags         # see enum GameStatusFlags
+        p_status = pkt.playerStatusFlags   # see enum PlayerStatusFlags
 
         self.check_playfab_result()
 
@@ -690,37 +693,40 @@ class AdvInfoState:
         now = time.monotonic()
         need_update_times = False
 
-        if not data.race_inited and ses.status == SESSION_STATUS_COUNTDOWN:
+        if not data.race_inited and s_status == SESSION_STATUS_COUNTDOWN:
             data = self.reset()
-            data.ses_status = ses.status   # see enum SessionStatus
+            data.race_inited = True
             data.sector_count = ses.sectorCount
             data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
-            data.race_inited = True
             data.track_id = ses.trackId.decode("utf-8", errors="replace").strip("\x00")
             data.track_name = ses.trackName.decode("utf-8", errors="replace").strip("\x00")
             print('>>> race_inited')
             self.last_track_id = data.track_id
             self.pf_worker.request_pb_wr(self.last_track_id)
 
-        if not data.race_started and data.race_inited and ses.status == SESSION_STATUS_RACING:
+        if not data.race_started and data.race_inited and not data.race_stopped and race_time_ms > 0:
             data.race_started = True
-            data.race_finished = False
-            data.ses_status = ses.status
             data.start_TIME_s = now
             data.start_time_ms = race_time_ms
             print(f'>>> race_started   {race_time_ms} ms  status = 0x{pkt.playerStatusFlags:02X}')
 
-        if data.race_started and not data.race_stopped and ses.status != SESSION_STATUS_COUNTDOWN and ses.status != SESSION_STATUS_RACING:
+        after_race = False
+        if data.race_inited:
+            after_race = s_status == SESSION_STATUS_ABANDONED or s_status == SESSION_STATUS_POST_RACE
+            if not after_race:
+                after_race = (p_status & PLAYER_STATUS_CONTROL_AI) or (g_status & GAME_STATUS_IN_RACE) == 0
+
+        if not data.race_stopped and data.race_started and after_race:
             data.race_stopped = True
-            data.race_started = False
-            data.race_inited  = False
+            data.race_inited = False
             print('>>> race_stopped')
+            need_update_times = True
 
         if not data.race_finished and lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS:
-            data.race_started = False
             data.race_finished = True
-            need_update_times = True
+            data.race_inited = False
             print('>>> race_finished')
+            need_update_times = True
 
         if data.race_started and not data.race_stopped and not data.race_finished:
             need_update_times = True
