@@ -525,7 +525,7 @@ class LeaderboardState:
             idx = info.participantIndex
             row = self.get(idx)
             row.name  = info.playerName.decode("utf-8", errors="replace").strip("\x00")
-            row.car_name = info.carName.decode("utf-8",    errors="replace").strip("\x00")
+            row.car_name = info.carName.decode("utf-8", errors="replace").strip("\x00")
 
     def snapshot(self) -> LeaderboardSnapshot:
         rows = [ ]
@@ -585,6 +585,7 @@ class AdvInfoState:
             data.sector_count = ses.sectorCount
             data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
             data.race_inited = True
+            print('>>> race_inited')
 
         if not data.race_started and data.race_inited and ses.status == SESSION_STATUS_RACING:
             data.race_started = True
@@ -592,19 +593,21 @@ class AdvInfoState:
             data.ses_status = ses.status
             data.start_TIME_s = now
             data.start_time_ms = race_time_ms
-            print(f'race_time_ms = {race_time_ms} ms  status = 0x{pkt.playerStatusFlags:02X}')
+            print(f'>>> race_started   {race_time_ms} ms  status = 0x{pkt.playerStatusFlags:02X}')
 
         if data.race_started and not data.race_stopped and ses.status != SESSION_STATUS_COUNTDOWN and ses.status != SESSION_STATUS_RACING:
             data.race_stopped = True
             data.race_started = False
             data.race_inited  = False
+            print('>>> race_stopped')
 
         if not data.race_finished and lb.status == PARTICIPANT_STATUS_FINISH_SUCCESS:
             data.race_started = False
             data.race_finished = True
             need_update_times = True
+            print('>>> race_finished')
 
-        if data.race_started:
+        if data.race_started and not data.race_stopped and not data.race_finished:
             need_update_times = True
 
         if need_update_times:
