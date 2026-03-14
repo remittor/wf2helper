@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 
 from wf2telemetry import *
+from wf2playfab import *
 
 OV_CFG_DEFAULTS = dict(
     max_rows    = 16,
@@ -76,6 +77,15 @@ def get_color(ov_cfg, tag: str) -> str:
         "air":    "#44bbff",
     }
     return TABLE.get(tag, ov_cfg.get("fg", "#e0e0e0"))
+
+def fmt_time(time_ms: int, e: int = 0) -> str:
+    ms = max(0, time_ms)
+    if e == 0 and ms == 0:
+        return "--:--.---"
+    mins = ms // 60000
+    secs = (ms % 60000) // 1000
+    frac = ms % 1000
+    return f"{mins:02d}:{secs:02d}.{frac:03d}"
 
 
 class BaseOverlay:
@@ -305,6 +315,12 @@ class AdvInfoSnapshot:
     race_started   : bool  = False # set True after first SESSION_STATUS_RACING
     race_stopped   : bool  = False
     race_finished  : bool  = False
+    
+    track_id       : str = ""
+    track_name     : str = ""
+    pb_rank        : int = 0
+    pb_time        : int = 0
+    wr_time        : int = 0
 
     start_TIME_s   : float = 0.0   # real time of race_started set True
     start_time_ms  : int   = 0
@@ -377,15 +393,10 @@ class AdvInfoOverlay(BaseOverlay):
             n = round(value * width)
             return full * n + empty * (width - n)
 
-        def fmt_time(ms: int) -> str:
-            ms   = max(0, ms)
-            mins = ms // 60000
-            secs = (ms % 60000) // 1000
-            frac = ms % 1000
-            return f"{mins:02d}:{secs:02d}.{frac:03d}"
-
         def fmt_s(ms: int, n: int) -> str:
             return fmt_time(ms) if ms > 0 else "--:--.---"
+
+        line(s("TRACK: ", "label"), s(d.track_name[:28]))
 
         # Race timer
         fin_tag = "good" if d.race_finished else "hi"
@@ -415,7 +426,8 @@ class AdvInfoOverlay(BaseOverlay):
                 line(s("BEST ", "label"), s(fmt_s(s1b, 1), "header"), s("  ", ""), s(fmt_s(s2b, 2), "header"), s("  ", ""), s(fmt_s(s3b, 3), "header"))
 
         line(s("LAP TIME ", "label"), s(fmt_time(d.lap_time_ms), "hi"))
-        line(s("LAP BEST ", "label"), s(fmt_time(d.lap_time_best), "good"))
+        line(s("LAP PB   ", "label"), s(fmt_time(d.pb_time), "good"), s(" RANK ", "label"), s(str(d.pb_rank) if d.pb_rank > 0 else ''))
+        line(s("LAP WR   ", "label"), s(fmt_time(d.wr_time), "good"))
 
         # Inputs
         line(s(" ──────────────────────────────", "label"))
@@ -553,8 +565,97 @@ class LeaderboardState:
         )
 
 
+class PlayFabWorker:
+    """
+    Executes requests to PlayFab in a separate daemon thread.
+    The main thread calls request_pb_wr(track_id) and immediately returns.
+    The result is available via get_result(), which returns a dict or None.
+    States:
+        idle — doing nothing
+        pending — the task has been assigned, waiting for execution
+        running — the request is currently being processed
+        done — the result is ready, retrieve it via get_result()
+        error — an error occurred (result is None)
+    """
+    def __init__(self):
+        self.task_queue  : queue.Queue = queue.Queue(maxsize = 1)
+        self.result      : dict | None = None
+        self.result_lock : threading.Lock = threading.Lock()
+        self.state       : str = "idle"   # idle / pending / running / done / error
+        self.playfab     : WF2PlayFab | None = None
+        self.pf_inited   : bool = False
+        self.thread = threading.Thread(target = self.worker, daemon = True, name = "PlayFabWorker")
+        self.thread.start()
+
+    def request_pb_wr(self, track_id: str) -> None:
+        with self.result_lock:
+            self.result = None
+        self.state = "pending"
+        while not self.task_queue.empty():
+            try:
+                self.task_queue.get_nowait()
+            except queue.Empty:
+                break
+        try:
+            self.task_queue.put_nowait(track_id)
+        except queue.Full:
+            pass
+
+    def get_result(self) -> dict | None:
+        if self.state != "done":
+            return None
+        with self.result_lock:
+            result = self.result
+            self.result = None
+        self.state = "idle"
+        return result
+
+    def worker(self) -> None:
+        while True:
+            try:
+                track_id = self.task_queue.get(timeout = 1.0)
+            except queue.Empty:
+                continue
+            self.state = "running"
+            result = self.fetch(track_id)
+            with self.result_lock:
+                self.result = result
+            self.state = "done" if result is not None else "error"
+
+    def fetch(self, track_id: str) -> dict | None:
+        try:
+            if not self.pf_inited:
+                if self.playfab is None:
+                    self.playfab = WF2PlayFab()
+                self.pf_inited = self.playfab.init_auth(attach_game = True)
+                if not self.pf_inited:
+                    print("[PlayFab] Failed to initialize auth.")
+                    return None
+            pb_time = 0
+            pb_rank = 0
+            wr_time = 0
+            # Personal best
+            entry = self.playfab.get_my_time(track_id)
+            if entry:
+                pb_time = int(entry.get("Scores", [0])[0])
+                pb_rank = entry.get("Rank", 0)
+            # World record (top-1)
+            entry_list = self.playfab.get_top(track_id, max_results = 1)
+            if entry_list and entry_list[0]:
+                wr_time = int(entry_list[0].get("Scores", [0])[0])
+            print(f"[PlayFab] {track_id}  WR: {fmt_time(wr_time)}  PB: {fmt_time(pb_time)}  Rank: {pb_rank}")
+            return { "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time }
+        except Exception as e:
+            print(f"[PlayFab] Error fetching {track_id}: {e}")
+            if "401" in str(e) or "Unauthorized" in str(e) or "EntityTokenExpired" in str(e):
+                self.pf_inited = False
+            return None
+
+
 class AdvInfoState:
     def __init__(self):
+        self.pf_worker = PlayFabWorker()   # daemon thread, starts immediately
+        self.last_track_id: str = ""       # track for which PB/WR was last requested
         self.reset()
 
     def reset(self) -> None:
@@ -563,6 +664,13 @@ class AdvInfoState:
 
     def get_data(self):
         return deepcopy(self.data)
+
+    def check_playfab_result(self) -> None:
+        result = self.pf_worker.get_result()
+        if result:
+            self.data.pb_time = result["pb_time"]
+            self.data.pb_rank = result["pb_rank"]
+            self.data.wr_time = result["wr_time"]
 
     def renew_from_main(self, pkt, traction_state: str = "") -> int:
         data = self.data
@@ -575,6 +683,8 @@ class AdvInfoState:
         ses  = pkt.session
         tires = pkt.carPlayer.tires
 
+        self.check_playfab_result()
+
         race_time_ms = max(0, hdr.raceTime)
         now = time.monotonic()
         need_update_times = False
@@ -585,7 +695,11 @@ class AdvInfoState:
             data.sector_count = ses.sectorCount
             data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
             data.race_inited = True
+            data.track_id = ses.trackId.decode("utf-8", errors="replace").strip("\x00")
+            data.track_name = ses.trackName.decode("utf-8", errors="replace").strip("\x00")
             print('>>> race_inited')
+            self.last_track_id = data.track_id
+            self.pf_worker.request_pb_wr(self.last_track_id)
 
         if not data.race_started and data.race_inited and ses.status == SESSION_STATUS_RACING:
             data.race_started = True

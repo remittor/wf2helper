@@ -139,10 +139,10 @@ class PlayFabClient:
         self.require_auth()
         max_results = min(max(1, max_results), self.PF_MAX_RESULTS)
         all_entries : list[dict] = [ ]
+        page_size = 100 if max_results >= 100 else max_results
         starting_position = 1
         while len(all_entries) < max_results:
-            remaining = max_results - len(all_entries)
-            page, entry_count = self.get_leaderboard_page(name, starting_position, page_size=100)
+            page, entry_count = self.get_leaderboard_page(name, starting_position, page_size = page_size)
             if not page:
                 break
             all_entries.extend(page)
@@ -365,8 +365,8 @@ class WF2PlayFab:
         Saves results to wf2tracks.json.
         Returns confirmed list of track names.
         """
-        variants = ["1", "2", "3", "4", "5", "1_rev", "2_rev", "3_rev", "4_rev", "5_rev" ]
-        confirmed = []
+        variants = [ "1", "2", "3", "4", "5", "1_rev", "2_rev", "3_rev", "4_rev", "5_rev" ]
+        confirmed = [ ]
         total = 0
         print(f"[INFO] Probing tracks ce-track01..{max_track_num:02d} with {len(variants)} variants each...")
         for n in range(1, max_track_num + 1):

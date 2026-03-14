@@ -21,7 +21,7 @@ overlays:
         fg_player: "#ffdd44"
         fg_dnf: "#888888"
     advinfo:
-        max_rows: 16
+        max_rows: 18
         x: 20
         y: 820
         alpha: 0.82
