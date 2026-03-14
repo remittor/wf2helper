@@ -125,6 +125,15 @@ class BaseOverlay:
         except queue.Full:
             pass
 
+    def set_visible(self, visible: bool) -> None:
+        root = self.root
+        if root is None:
+            return
+        if visible:
+            root.after(0, root.deiconify)
+        else:
+            root.after(0, root.withdraw)
+
     def run(self) -> None:
         ov   = self.ov
         root = tk.Tk()

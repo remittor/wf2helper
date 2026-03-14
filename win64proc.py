@@ -54,6 +54,7 @@ TH32CS_SNAPMODULE   = 0x00000008
 TH32CS_SNAPMODULE32 = 0x00000010
 
 INVALID_HANDLE_VALUE = c_void_p(-1).value
+STILL_ACTIVE         = 259   # GetExitCodeProcess returns this while process is running
 
 
 # ----------------------------------------------------------------------
@@ -132,6 +133,8 @@ class Win64Process:
         self.fn_GetWindowThreadProcessId = None
         self.fn_GetWindowTextW           = None
         self.fn_GetWindowTextLengthW     = None
+        self.fn_GetForegroundWindow      = None
+        self.fn_GetExitCodeProcess       = None
 
         Win64Process.init_win_api(self)
 
@@ -248,6 +251,14 @@ class Win64Process:
         self.fn_GetWindowTextLengthW.restype  = c_int
         self.fn_GetWindowTextLengthW.argtypes = [HWND]
 
+        self.fn_GetForegroundWindow        = user32.GetForegroundWindow
+        self.fn_GetForegroundWindow.restype  = HWND
+        self.fn_GetForegroundWindow.argtypes = []
+
+        self.fn_GetExitCodeProcess        = kernel32.GetExitCodeProcess
+        self.fn_GetExitCodeProcess.restype  = BOOL
+        self.fn_GetExitCodeProcess.argtypes = [HANDLE, POINTER(DWORD)]
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -265,6 +276,34 @@ class Win64Process:
         if self.handle:
             self.fn_CloseHandle(self.handle)
             self.handle = None
+
+    def is_alive(self) -> bool:
+        """
+        Return True if the process opened via find_process() is still running.
+        Uses GetExitCodeProcess — returns STILL_ACTIVE (259) while running.
+        Returns False if handle is not open or process has exited.
+        """
+        if not self.handle:
+            return False
+        exit_code = DWORD(0)
+        ok = self.fn_GetExitCodeProcess(self.handle, byref(exit_code))
+        return bool(ok) and exit_code.value == STILL_ACTIVE
+
+    def is_foreground(self) -> bool:
+        """
+        Return True if the foreground window belongs to this process.
+        Compares PID of the active window against self.pid via
+        GetForegroundWindow + GetWindowThreadProcessId.
+        Returns False if process is not found or not in foreground.
+        """
+        if not self.pid:
+            return False
+        hwnd = self.fn_GetForegroundWindow()
+        if not hwnd:
+            return False
+        pid_out = DWORD(0)
+        self.fn_GetWindowThreadProcessId(hwnd, byref(pid_out))
+        return pid_out.value == self.pid
 
     def get_process_exe_path(self, pid: int) -> str | None:
         """Get full exe path for a given pid."""

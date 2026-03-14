@@ -29,6 +29,7 @@ from pynput.keyboard import Controller, KeyCode
 
 from wf2telemetry import *
 from wf2overlay import create_overlays, LeaderboardState, AdvInfoState
+from win64proc import Win64Process
 
 import yaml
 
@@ -517,50 +518,31 @@ class SessionMonitor:
 
 class ActiveWindowChecker:
     """
-    Checks whether the currently active (foreground) window title contains
-    a given keyword. Works for both windowed and fullscreen apps on Windows.
-    Uses only WinAPI via ctypes — no third-party libs required.
-
-    WinAPI function references and the title buffer are created once in
-    __init__ and reused on every call.
-
-    To avoid calling WinAPI on every packet (63 Hz), results are cached for
-    cache_s seconds.
+    Checks whether Wreckfest2.exe is running AND its window is in the foreground.
     """
+    EXE_NAME = "Wreckfest2.exe"
 
     def __init__(self, keyword: str = "Wreckfest", cache_s: float = 0.5):
-        self.keyword = keyword.lower()
+        self.keyword = keyword
         self.cache_s = cache_s
-        self.last_check = 0.0
+        self.last_check  = 0.0
         self.last_result = False
-
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-
-        self.get_foreground_window = user32.GetForegroundWindow
-        self.get_foreground_window.restype = ctypes.wintypes.HWND
-
-        self.get_window_text = user32.GetWindowTextW
-        self.get_window_text.argtypes = (ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int)
-        self.get_window_text.restype = ctypes.c_int
-
-        # Reusable buffer — allocated once
-        self.buf = ctypes.create_unicode_buffer(512)
-        self.buf_len = len(self.buf)
+        self.proc = Win64Process()
 
     def is_active(self) -> bool:
         now = time.monotonic()
         if now - self.last_check < self.cache_s:
             return self.last_result
         self.last_check  = now
-        self.last_result = self.keyword in self.get_title().lower()
+        self.last_result = self.check()
         return self.last_result
 
-    def get_title(self) -> str:
-        hwnd = self.get_foreground_window()
-        if not hwnd:
-            return ""
-        self.get_window_text(hwnd, self.buf, self.buf_len)
-        return self.buf.value
+    def check(self) -> bool:
+        if not self.proc.is_alive():
+            self.proc.close_process()
+            if not self.proc.find_process(self.EXE_NAME):
+                return False
+        return self.proc.is_foreground()
 
 
 def find_telemetry_configs() -> list:
@@ -693,6 +675,20 @@ def main():
     current_car = ""
     game_was_active = False
     
+    def check_game_acvive(frame):
+        nonlocal game_was_active
+        game_active = wnd_chk.is_active()
+        if game_active != game_was_active:
+            game_was_active = game_active
+            if game_active:
+                print("[WF2] Game window active — shifting enabled")
+            else:
+                print("[WF2] Game window inactive — shifting suspended")
+            for ov in (lb_ov, adv_ov):
+                if ov:
+                    ov.set_visible(game_active)
+        return game_active
+    
     def handle_main(frame):
         nonlocal current_car, game_was_active
         if monitor.update(frame):
@@ -715,14 +711,7 @@ def main():
             shifter.reconfigure(ShifterConfig(cfg, car_name))
             print(f"[WF2] Car: {car_name}")
 
-        game_active = wnd_chk.is_active()
-        if game_active != game_was_active:
-            game_was_active = game_active
-            if game_active:
-                print("[WF2] Game window active — shifting enabled")
-            else:
-                print("[WF2] Game window inactive — shifting suspended")
-
+        game_active = check_game_acvive(frame)
         shifted = 0
         if game_active and opt.gearauto:
             shifted = shifter.process(frame)
@@ -746,6 +735,7 @@ def main():
             while True:
                 pkt_type, pkt = receiver.recv_any()
                 if pkt is None:
+                    check_game_acvive(None)
                     continue
                 if pkt_type == MAIN_PACKET_TYPE:
                     handle_main(pkt)
