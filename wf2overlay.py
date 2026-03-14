@@ -168,10 +168,10 @@ class BaseOverlay:
             self.root.after(100, self.poll)
 
     def draw(self, lines: list) -> None:
-        c = self.canvas
-        if c is None:
+        canvas = self.canvas
+        if canvas is None:
             return
-        c.delete("all")
+        canvas.delete("all")
         pad    = self.PAD
         lh     = self.lh
         cw     = self.cw
@@ -191,16 +191,16 @@ class BaseOverlay:
                     continue
                 x = pad + col * cw
                 # 1. shadow
-                c.create_text(x + dx, y + dy, text=text, fill=shadow, font=font, anchor="nw")
+                canvas.create_text(x + dx, y + dy, text=text, fill=shadow, font=font, anchor="nw")
                 # 2. main
-                c.create_text(x, y, text=text, fill=color or fg_def, font=font, anchor="nw")
+                canvas.create_text(x, y, text=text, fill=color or fg_def, font=font, anchor="nw")
                 col += len(text)
                 pass
             max_col = max(max_col, col)
             pass
         w = pad * 2 + max_col * cw + dx
         h = pad * 2 + len(lines) * lh + dy
-        c.configure(width=w, height=h)
+        canvas.configure(width=w, height=h)
         self.root.geometry(f"{w}x{h}")
 
     def gen_segment(self, text: str, tag: str = "") -> tuple:
@@ -289,11 +289,11 @@ class LeaderboardOverlay(BaseOverlay):
         rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
         for row in rows:
             lap_str  = f"{row.lap}/{snap.lap_total}" if snap.lap_total else str(row.lap)
-            name_str = row.name[:12]     if row.name     else f"P{row.index:02d}"
+            name_str = row.name[:12]    if row.name     else f"P{row.index:02d}"
             car_str  = row.car_name[:8] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
             tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
-            line(seg(f" {pos_str}  {name_str:<12} {car_str:<8} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
+            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f"{car_str:<8} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
 
         return lines[:self.max_rows]
 
