@@ -960,6 +960,7 @@ class TailDistOverlay:
     RECT_TTL              = 2.0
     MAX_RIVALS_DEFAULT    = 8
     POLL_INTERVAL_DEFAULT = 100
+    MAX_DELTA_MS_DEFAULT  = 15000
 
     def __init__(self, ov: dict, exe_name: str = "Wreckfest2.exe"):
         self.ov           = ov
@@ -973,6 +974,7 @@ class TailDistOverlay:
         self.name_shadow  = ov.get("name_shadow",   self.NAME_SHADOW_DEFAULT)
         self.max_rivals   = int(ov.get("max_rivals",    self.MAX_RIVALS_DEFAULT))
         self.poll_interval= int(ov.get("poll_interval", self.POLL_INTERVAL_DEFAULT))
+        self.max_delta_ms = int(ov.get("max_delta_ms",  self.MAX_DELTA_MS_DEFAULT))
         self.alpha        = float(ov.get("alpha", 0.5))
         self.transparent  = bool( ov.get("transparent", True))
         self.chroma_key   = ov.get("chroma_key", "#000005")
@@ -1110,7 +1112,9 @@ class TailDistOverlay:
         for idx, row in lb_state.rows.items():
             n = row.name or f"P{idx:02d}"
             name_map[idx] = n[:TailDistState.NAME_MAX_LEN]
-            if not row.is_player and row.delta_to_player < 0:
+            # delta_to_player < 0: rival is behind player (lap-time metric)
+            # abs(delta_to_player) <= 15000 ms: not more than 15 seconds behind
+            if not row.is_player and -self.max_delta_ms <= row.delta_to_player < 0:
                 behind_set.add(idx)
 
         rivals = [ ]
@@ -1127,8 +1131,15 @@ class TailDistOverlay:
             dist_m = math.sqrt(dist2)
             if dist_m > 0.01:
                 inv   = 1.0 / dist_m
-                cross = hx * (dz * inv) - hz * (dx * inv)
-                dot   = hx * (dx * inv) + hz * (dz * inv)
+                nx    = dx * inv
+                nz    = dz * inv
+                cross = hx * nz - hz * nx
+                dot   = hx * nx + hz * nz
+                # dot < 0 means rival is geometrically AHEAD of player
+                # (vector from player to rival points opposite to heading).
+                # Exclude such rivals regardless of lap-time delta.
+                if dot >= 0.0:
+                    continue
                 angle_deg = -math.degrees(math.atan2(cross, dot))
             else:
                 angle_deg = 0.0
