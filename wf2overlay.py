@@ -797,7 +797,9 @@ class AdvInfoState:
                     data.lap_time_best = data.pb_time_new
                 if data.pb_time_new > 0 and data.pb_time_new < data.pb_time and data.rank_page:
                     page_first_time = data.rank_page[0][1]  # [ ( rank, score_ms ) ]
-                    if data.pb_time_new > page_first_time:
+                    if data.pb_time_new <= page_first_time:
+                        data.pb_rank_new = 0
+                    else:
                         for rank, score_ms in data.rank_page:
                             if score_ms > data.pb_time_new:
                                 data.pb_rank_new = rank
