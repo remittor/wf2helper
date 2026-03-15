@@ -755,7 +755,8 @@ class AdvInfoState:
 
         if need_update_times:
             data.race_time_ms = race_time_ms
-            data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
+            if data.pkt_count_after_finish == 0:
+                data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
 
             if data.lap_time_ms > tm.lapTimeCurrent:
                 # new lap started
@@ -768,7 +769,7 @@ class AdvInfoState:
             if data.pb_time > 1:
                 if tm.lapTimeBest < data.pb_time and tm.lapTimeBest > 0:
                     data.pb_time_new = tm.lapTimeBest
-                if tm.lapTimeCurrent < data.pb_time_new and tm.lapTimeCurrent > 0 and data.race_finished:
+                if tm.lapTimeCurrent < data.pb_time_new and tm.lapTimeCurrent > 8000 and data.race_finished:
                     data.pb_time_new = tm.lapTimeCurrent
                     data.lap_time_best = data.pb_time_new
 
