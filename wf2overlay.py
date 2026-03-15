@@ -757,8 +757,8 @@ class AdvInfoState:
                     need_update_times = True
 
         if need_update_times:
-            data.race_time_ms = race_time_ms
             if data.pkt_count_after_finish == 0:
+                data.race_time_ms = race_time_ms
                 data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
 
             if data.lap_time_ms > tm.lapTimeCurrent:
