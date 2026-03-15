@@ -135,6 +135,8 @@ class Win64Process:
         self.fn_GetWindowTextLengthW     = None
         self.fn_GetForegroundWindow      = None
         self.fn_GetExitCodeProcess       = None
+        self.fn_IsWindowVisible          = None
+        self.fn_GetWindowRect            = None
 
         Win64Process.init_win_api(self)
 
@@ -259,6 +261,18 @@ class Win64Process:
         self.fn_GetExitCodeProcess.restype  = BOOL
         self.fn_GetExitCodeProcess.argtypes = [HANDLE, POINTER(DWORD)]
 
+        self.fn_IsWindowVisible        = user32.IsWindowVisible
+        self.fn_IsWindowVisible.restype  = BOOL
+        self.fn_IsWindowVisible.argtypes = [HWND]
+
+        class RECT(ctypes.Structure):
+            _fields_ = [ ("left", c_long), ("top", c_long), ("right", c_long), ("bottom", c_long) ]
+        self.RECT = RECT
+
+        self.fn_GetWindowRect        = user32.GetWindowRect
+        self.fn_GetWindowRect.restype  = BOOL
+        self.fn_GetWindowRect.argtypes = [HWND, POINTER(RECT)]
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -304,6 +318,43 @@ class Win64Process:
         pid_out = DWORD(0)
         self.fn_GetWindowThreadProcessId(hwnd, byref(pid_out))
         return pid_out.value == self.pid
+
+    def get_process_window_rect(self) -> tuple | None:
+        """
+        Find the first visible window belonging to self.pid and return
+        (left, top, width, height) in screen pixels.
+        Returns None if no visible window is found or process is not open.
+        """
+        if not self.pid:
+            return None
+
+        found = [None]   # list so the closure can assign to it
+        target_pid = self.pid
+        pid_buf = DWORD(0)
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(BOOL, HWND, LPARAM)
+
+        def enum_cb(hwnd, lparam):
+            self.fn_GetWindowThreadProcessId(hwnd, byref(pid_buf))
+            if pid_buf.value == target_pid:
+                if self.fn_IsWindowVisible(hwnd):
+                    found[0] = hwnd
+                    return False   # stop enumeration
+            return True
+
+        self.fn_EnumWindows(WNDENUMPROC(enum_cb), 0)
+
+        if found[0] is None:
+            return None
+
+        rect = self.RECT()
+        if not self.fn_GetWindowRect(found[0], byref(rect)):
+            return None
+        w = rect.right  - rect.left
+        h = rect.bottom - rect.top
+        if w <= 0 or h <= 0:
+            return None
+        return (rect.left, rect.top, w, h)
 
     def get_process_exe_path(self, pid: int) -> str | None:
         """Get full exe path for a given pid."""

@@ -20,8 +20,9 @@ overlays:
         fg: "#ffffff"
         fg_player: "#ffdd44"
         fg_dnf: "#888888"
+
     advinfo:
-        max_rows: 18
+        max_rows: 20
         x: 20
         y: 820
         alpha: 0.82
@@ -34,6 +35,37 @@ overlays:
         shadow: "#000000"
         fg: "#ffffff"
         fg_player: "#ffffff"  # used for race timer
+
+    taildist:
+        # --- Geometry ---
+        max_view_radius: 80.0    # rivals beyond this distance (m) are ignored
+        fov: 90                  # horizontal field of view in degrees (120 = comfortable)
+        canvas_height: 200       # canvas height in pixels
+        marker_width: 0.5        # horiz_r = vert_r * marker_width
+        max_rivals: 8            # max number of rivals shown (closest ones kept)
+        poll_interval: 100       # overlay redraw interval in ms (lower = smoother but more CPU)
+
+        # --- Colours (gradient far->near) ---
+        color_far:     "#e0e0e0"   # colour at max_view_radius * 80% (farthest visible)
+        color_near:    "#0055ff"   # colour at distance 0 (closest)
+        outline_color: "#000000"   # ellipse outline colour
+        name_color:    "#ffffff"   # rival name text colour
+        name_shadow:   "#000000"   # rival name text shadow colour
+
+        # --- Window ---
+        alpha: 0.5
+        transparent: true
+        chroma_key: "#000005"
+        bg: "#000001"
+        font_size: 14
+        font: "Terminal"
+        bold: false
+        shadow: "#000000"
+        fg: "#ffffff"
+        fg_player: "#ffffff"  # used for race timer
+
+# overlays.taildist section above activates the TailDist overlay.
+# The window is positioned automatically at the bottom of the game window.
 
 auto_shifter:
     landing_settle_ms: 400  # wait after landing before shifting, ms

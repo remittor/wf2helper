@@ -28,7 +28,7 @@ print(f"Python version: {sys.version}")
 from pynput.keyboard import Controller, KeyCode
 
 from wf2telemetry import *
-from wf2overlay import create_overlays, LeaderboardState, AdvInfoState
+from wf2overlay import create_overlays, LeaderboardState, AdvInfoState, TailDistState
 from win64proc import Win64Process
 
 import yaml
@@ -651,9 +651,14 @@ def main():
     wnd_chk  = ActiveWindowChecker(keyword="Wreckfest", cache_s = 0.2)
     slip_res = SlippageResearcher() if opt.slippage else None
 
-    lb_ov, adv_ov = create_overlays(cfg) if opt.info else (None, None)
-    lb_state  = LeaderboardState() if lb_ov  else None
-    adv_state = AdvInfoState()     if adv_ov else None
+    lb_ov, adv_ov, tail_ov = create_overlays(cfg) if opt.info else (None, None, None)
+    taildist_cfg = cfg.get("overlays", {}).get("taildist", {})
+    radius_m     = float(taildist_cfg.get("max_view_radius", 250.0))
+    lb_state     = LeaderboardState() if lb_ov  else None
+    adv_state    = AdvInfoState()     if adv_ov else None
+    tail_state   = TailDistState(radius_m) if tail_ov else None
+    if tail_ov and tail_state and lb_state:
+        tail_ov.attach(tail_state, lb_state)
 
     if slip_res:
         print(
@@ -684,7 +689,7 @@ def main():
                 print("[WF2] Game window active — shifting enabled")
             else:
                 print("[WF2] Game window inactive — shifting suspended")
-            for ov in (lb_ov, adv_ov):
+            for ov in (lb_ov, adv_ov, tail_ov):
                 if ov:
                     ov.set_visible(game_active)
         return game_active
@@ -727,6 +732,9 @@ def main():
             adv_state.renew_from_main(frame, traction_state = tr)
             adv_ov.push(adv_state.get_data())
 
+        if tail_state:
+            tail_state.update_main(frame)
+
         stats.show_stat(frame, forced = shifted > 0)
 
     try:
@@ -746,6 +754,9 @@ def main():
                 elif pkt_type == PARTICIPANTS_TIMING_PACKET_TYPE:
                     if lb_state:
                         lb_state.update_timing(pkt)
+                elif pkt_type == PARTICIPANTS_MOTION_PACKET_TYPE:
+                    if tail_state is not None and pkt is not None:
+                        tail_state.update_motion(pkt)
                 elif pkt_type == PARTICIPANTS_INFO_PACKET_TYPE:
                     if lb_state:
                         lb_state.update_info(pkt)

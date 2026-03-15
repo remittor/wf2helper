@@ -28,9 +28,12 @@ DAMAGE_BITS_PER_PART   = 3
 DAMAGE_BYTES_PER_PART  = (DAMAGE_PARTS_MAX * DAMAGE_BITS_PER_PART + 7) // 8  # = 21
 
 MAIN_PACKET_TYPE = 0
-PARTICIPANTS_LEADERBOARD_PACKET_TYPE  = 1
-PARTICIPANTS_TIMING_PACKET_TYPE       = 2
-PARTICIPANTS_INFO_PACKET_TYPE         = 5
+PARTICIPANTS_LEADERBOARD_PACKET_TYPE    = 1
+PARTICIPANTS_TIMING_PACKET_TYPE         = 2
+PARTICIPANTS_INFO_PACKET_TYPE           = 5
+PARTICIPANTS_TIMING_SECTORS_PACKET_TYPE = 3
+PARTICIPANTS_MOTION_PACKET_TYPE         = 4
+PARTICIPANTS_DAMAGE_PACKET_TYPE         = 6
 
 SESSION_STATUS_NONE      = 0
 SESSION_STATUS_PRE_RACE  = 1
@@ -128,6 +131,23 @@ class ParticipantInfo(_BaseStruct):
         ("lastCollisionTime",         c_int32),
         ("lastResetTime",             c_int32),
         ("reserved",                  c_char * 16),
+    ]
+
+class ParticipantMotion(_BaseStruct):
+    _fields_ = [
+        # Motion::Orientation
+        ("positionX",         c_float),
+        ("positionY",         c_float),
+        ("positionZ",         c_float),
+        ("orientationQuatX",  c_float),
+        ("orientationQuatY",  c_float),
+        ("orientationQuatZ",  c_float),
+        ("orientationQuatW",  c_float),
+        ("extentsX",          c_uint16),  # car half-width,  cm
+        ("extentsY",          c_uint16),  # car half-height, cm
+        ("extentsZ",          c_uint16),  # car half-length, cm
+        # Motion::VelocityEssential
+        ("velocityMagnitude", c_float),   # m/s
     ]
 
 class ParticipantDamage(_BaseStruct):
@@ -321,6 +341,22 @@ class PacketParticipantsTiming(_BaseStruct):
         ("reserved",              c_char * 64),
     ]
 
+class PacketParticipantsTimingSectors(_BaseStruct):
+    _fields_ = [
+        ("header",                       PinoHeader),
+        ("participantVisibility",        c_uint8),
+        ("participantsTimingSectors",    ParticipantTimingSectors * PARTICIPANTS_MAX),
+        ("reserved",                     c_char * 64),
+    ]
+
+class PacketParticipantsMotion(_BaseStruct):
+    _fields_ = [
+        ("header",                PinoHeader),
+        ("participantVisibility", c_uint8),
+        ("participantsMotion",    ParticipantMotion * PARTICIPANTS_MAX),
+        # No reserved bytes in this packet per spec
+    ]
+
 class PacketParticipantsInfo(_BaseStruct):
     _fields_ = [
         ("header",                PinoHeader),
@@ -361,9 +397,11 @@ class WF2TelemetryReceiver:
     def close(self):
         self.sock.close()
 
-    PKT_LEADERBOARD_SIZE = sizeof(PacketParticipantsLeaderboard)
-    PKT_TIMING_SIZE      = sizeof(PacketParticipantsTiming)
-    PKT_INFO_SIZE        = sizeof(PacketParticipantsInfo)
+    PKT_LEADERBOARD_SIZE     = sizeof(PacketParticipantsLeaderboard)
+    PKT_TIMING_SIZE          = sizeof(PacketParticipantsTiming)
+    PKT_TIMING_SECTORS_SIZE  = sizeof(PacketParticipantsTimingSectors)
+    PKT_MOTION_SIZE          = sizeof(PacketParticipantsMotion)
+    PKT_INFO_SIZE            = sizeof(PacketParticipantsInfo)
 
     def parse_main(self, data: bytes) -> Optional[PacketMain]:
         if not data.startswith(SIGNATURE):
@@ -392,6 +430,24 @@ class WF2TelemetryReceiver:
         if data[4] != PARTICIPANTS_TIMING_PACKET_TYPE:
             return None
         return PacketParticipantsTiming.from_buffer_copy(data[:self.PKT_TIMING_SIZE])
+
+    def parse_timing_sectors(self, data: bytes) -> Optional[PacketParticipantsTimingSectors]:
+        if not data.startswith(SIGNATURE):
+            return None
+        if len(data) < self.PKT_TIMING_SECTORS_SIZE:
+            return None
+        if data[4] != PARTICIPANTS_TIMING_SECTORS_PACKET_TYPE:
+            return None
+        return PacketParticipantsTimingSectors.from_buffer_copy(data[:self.PKT_TIMING_SECTORS_SIZE])
+
+    def parse_motion(self, data: bytes) -> Optional[PacketParticipantsMotion]:
+        if not data.startswith(SIGNATURE):
+            return None
+        if len(data) < self.PKT_MOTION_SIZE:
+            return None
+        if data[4] != PARTICIPANTS_MOTION_PACKET_TYPE:
+            return None
+        return PacketParticipantsMotion.from_buffer_copy(data[:self.PKT_MOTION_SIZE])
 
     def parse_info(self, data: bytes) -> Optional[PacketParticipantsInfo]:
         if not data.startswith(SIGNATURE):
@@ -423,6 +479,10 @@ class WF2TelemetryReceiver:
             return pkt_type, self.parse_leaderboard(data)
         if pkt_type == PARTICIPANTS_TIMING_PACKET_TYPE:
             return pkt_type, self.parse_timing(data)
+        if pkt_type == PARTICIPANTS_TIMING_SECTORS_PACKET_TYPE:
+            return pkt_type, self.parse_timing_sectors(data)
+        if pkt_type == PARTICIPANTS_MOTION_PACKET_TYPE:
+            return pkt_type, self.parse_motion(data)
         if pkt_type == PARTICIPANTS_INFO_PACKET_TYPE:
             return pkt_type, self.parse_info(data)
         return pkt_type, None
