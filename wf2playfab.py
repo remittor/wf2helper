@@ -416,6 +416,28 @@ class WF2PlayFab:
             save_json(entry, output_file)
         return entry
 
+    def get_rank_after_pb(self, leaderboard_name: str, old_rank: int) -> int | None:
+        """
+        Estimate the player's new rank after setting a personal best.
+
+        Strategy: fetch 100 entries starting at max(1, old_rank - 99).
+        That page covers old_rank and up to 99 positions above it.
+        Find the player's entry by entity_id and return its new Rank.
+        Returns None if player entry not found in that page.
+
+        This approach uses a single GetLeaderboard request (PageSize <= 100).
+        The result is approximate: other players may have improved in the
+        meantime, but it is accurate enough for display purposes.
+        """
+        leaderboard_name = self.normalize_leaderboard_name(leaderboard_name)
+        start = max(1, old_rank - 99)
+        entries, _ = self.client.get_leaderboard_page(leaderboard_name, starting_position=start, page_size=100)
+        for entry in entries:
+            eid = entry.get("Entity", {}).get("Id", "")
+            if eid == self.entity_id:
+                return entry.get("Rank")
+        return None
+
     def get_my_times_all_tracks(self, output_file: str | None = None) -> dict[str, dict]:
         """
         Fetch current player's best lap from every known track leaderboard.

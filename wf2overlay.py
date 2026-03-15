@@ -332,9 +332,11 @@ class AdvInfoSnapshot:
     track_id       : str = ""
     track_name     : str = ""
     pb_rank        : int = 0
+    pb_rank_new    : int = 0   # estimated new rank after PB, from rank_page
     pb_time        : int = 0
     pb_time_new    : int = 0
     wr_time        : int = 0
+    rank_page      : list = field(default_factory=list)  # (rank, score_ms) list fetched at race start
 
     start_TIME_s   : float = 0.0   # real time of race_started set True
     start_time_ms  : int   = 0
@@ -443,7 +445,9 @@ class AdvInfoOverlay(BaseOverlay):
         lap_tag = "good" if d.pb_time_new > 0 else ""
         lap_suffix = " [NEW PB]" if d.pb_time_new > 0 else ""
         line(s("LAP BEST ", "label"), s(fmt_time(d.lap_time_best), lap_tag), s(lap_suffix, "good"))
-        rank_suffix = f' → ???' if d.pb_time_new > 0 else ""
+        rank_suffix = ""
+        if d.pb_time_new > 0:
+            rank_suffix = f' → {d.pb_rank_new}' if d.pb_rank_new > 0 else ' → ???'
         line(s("LAP PB   ", "label"), s(fmt_time(d.pb_time), "good"), s(" RANK ", "label"), s(str(d.pb_rank) if d.pb_rank > 0 else ''), s(rank_suffix))
         line(s("LAP WR   ", "label"), s(fmt_time(d.wr_time), "good"))
 
@@ -641,17 +645,18 @@ class PlayFabWorker:
             self.state = "done" if result is not None else "error"
 
     def fetch(self, track_id: str) -> dict | None:
+        pb_time = 0
+        pb_rank = 0
+        wr_time = 0
+        rank_page = [ ]
         try:
             if not self.pf_inited:
                 if self.playfab is None:
                     self.playfab = WF2PlayFab()
                 self.pf_inited = self.playfab.init_auth(attach_game = True)
                 if not self.pf_inited:
-                    print("[PlayFab] Failed to initialize auth.")
+                    print("[PlayFab] [ERROR] Failed to initialize auth.")
                     return None
-            pb_time = 0
-            pb_rank = 0
-            wr_time = 0
             # Personal best
             entry = self.playfab.get_my_time(track_id)
             if entry:
@@ -662,12 +667,25 @@ class PlayFabWorker:
             if entry_list and entry_list[0]:
                 wr_time = int(entry_list[0].get("Scores", [0])[0])
             print(f"[PlayFab] {track_id}  WR: {fmt_time(wr_time)}  PB: {fmt_time(pb_time)}  Rank: {pb_rank}")
-            return { "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time }
         except Exception as e:
-            print(f"[PlayFab] Error fetching {track_id}: {e}")
+            print(f"[PlayFab] [ERROR] fetching {track_id}: {e}")
             if "401" in str(e) or "Unauthorized" in str(e) or "EntityTokenExpired" in str(e):
                 self.pf_inited = False
             return None
+        try:
+            # Fetch rank page. Single GetLeaderboard call: start=max(1, pb_rank-98), page_size=100.
+            # Stored as list of (rank, score_ms), rank ascending, score_ms lower=faster.
+            if pb_rank > 0:
+                lb_name = self.playfab.normalize_leaderboard_name(track_id)
+                start = max(1, pb_rank - 98)
+                page, _ = self.playfab.client.get_leaderboard_page(lb_name, starting_position = start, page_size = 100)
+                rank_page = [ (entry.get("Rank", 0), int(entry.get("Scores", [0])[0])) for entry in page ]
+                time_range = fmt_time(rank_page[0][1]) + ' ... ' + fmt_time(rank_page[-1][1]) if rank_page else ""
+                print(f"[PlayFab] Rank page: loaded {len(rank_page)} entries from rank {start}  [{time_range}]")
+        except Exception as e:
+            print(f"[PlayFab] [ERROR] Rank page fetch failed: {e}")
+
+        return { "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time, "rank_page": rank_page }
 
 
 class AdvInfoState:
@@ -686,9 +704,10 @@ class AdvInfoState:
     def check_playfab_result(self) -> None:
         result = self.pf_worker.get_result()
         if result:
-            self.data.pb_time = result["pb_time"]
-            self.data.pb_rank = result["pb_rank"]
-            self.data.wr_time = result["wr_time"]
+            self.data.pb_time   = result["pb_time"]
+            self.data.pb_rank   = result["pb_rank"]
+            self.data.wr_time   = result["wr_time"]
+            self.data.rank_page = result.get("rank_page", [ ])
 
     def renew_from_main(self, pkt, traction_state: str = "") -> int:
         data = self.data
@@ -769,12 +788,24 @@ class AdvInfoState:
             data.lap_time_best = tm.lapTimeBest
             data.lap_progress = tm.lapProgress
 
+            prev_pb_time_new = data.pb_time_new
             if data.pb_time > 1:
                 if tm.lapTimeBest < data.pb_time and tm.lapTimeBest > 0:
                     data.pb_time_new = tm.lapTimeBest
                 if tm.lapTimeCurrent < data.pb_time_new and tm.lapTimeCurrent > 8000 and data.race_finished:
                     data.pb_time_new = tm.lapTimeCurrent
                     data.lap_time_best = data.pb_time_new
+                if data.pb_time_new > 0 and data.pb_time_new < data.pb_time and data.rank_page:
+                    page_first_time = data.rank_page[0][1]  # [ ( rank, score_ms ) ]
+                    if data.pb_time_new > page_first_time:
+                        for rank, score_ms in data.rank_page:
+                            if score_ms > data.pb_time_new:
+                                data.pb_rank_new = rank
+                                break
+
+            if prev_pb_time_new != data.pb_time_new:
+                rank_new = str(data.pb_rank_new) if data.pb_rank_new > 0 else "???"
+                print(f'[WF2] NEW PB: {fmt_time(data.pb_time_new)}  RANK: {data.pb_rank} -> {rank_new}')
 
             s1 = tms.sectorTimeCurrentLap1 
             s2 = tms.sectorTimeCurrentLap2

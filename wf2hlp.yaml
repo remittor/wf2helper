@@ -43,6 +43,7 @@ overlays:
         canvas_height: 200       # canvas height in pixels
         marker_width: 0.5        # horiz_r = vert_r * marker_width
         max_rivals: 8            # max number of rivals shown (closest ones kept)
+        max_delta_ms: 15000      # ignore rivals more than this ms behind (15 sec)
         poll_interval: 100       # overlay redraw interval in ms (lower = smoother but more CPU)
 
         # --- Colours (gradient far->near) ---
