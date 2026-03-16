@@ -42,9 +42,12 @@ from wf2playfab import *
 
 
 OV_CFG_DEFAULTS = dict(
+    show        = True,
     max_rows    = 16,
     x           = 20,
     y           = 400,
+    bg_alpha    = 0.2,
+    bg_color    = "#111111",
     alpha       = 0.82,
     transparent = True,
     chroma_key  = "#000005",
@@ -93,15 +96,22 @@ def fmt_time(time_ms: int, e: int = 0) -> str:
 
 class BaseOverlay:
     """
-    Always-on-top tkinter Canvas window in its own daemon thread.
+    Always-on-top tkinter text overlay with optional semi-transparent background.
 
-    render(data) must return: list of lines.
-    Each line is a list of (text, color_hex) tuples — segments placed
-    left-to-right in monospace columns.
+    Two separate Tk windows are used:
+      bg_root  — background window, solid colour at bg_alpha opacity.
+                 Only shown during SESSION_STATUS_COUNTDOWN / RACING. Controlled via set_race_active().
+      root     — text window, transparent background, text at alpha opacity.
+                 Always visible when the overlay is shown (set_visible).
 
-    For each segment the engine draws:
-      1. Shadow copy at (+1, +1) px in self.shadow colour
-      2. Main text at (0, 0) in the segment colour
+    Config keys:
+      show        — bool, if False the overlay renders nothing (default True)
+      bg_alpha    — opacity of the background window bg_root (default 0.2)
+      bg_color    — background fill colour for bg_root (default "#000000")
+      alpha       — opacity of the text window (default 0.82)
+      transparent — use chroma-key transparency on text window (default True)
+      chroma_key  — chroma-key colour (default "#000005")
+      bg          — background fill colour (default "#000000")
     """
 
     SHADOW_DX = 1
@@ -112,13 +122,20 @@ class BaseOverlay:
         self.ov     = ov
         self.title  = title
         self.shadow = ov.get("shadow", "#000000")
+        self.show     = bool(ov.get("show", True))
+        self.bg_alpha = float(ov.get("bg_alpha", 0.2))
+        self.bg_color = ov.get("bg_color", "#000000")
         self.queue  = queue.Queue(maxsize=8)
+        self.cmd_queue = queue.Queue()  # thread-safe window commands
         self.last   = None
         self.root   = None
+        self.bg_root= None
         self.canvas = None
+        self.bg_canvas = None
         self.font   = None   # tkfont.Font
         self.cw     = 0      # char width px
         self.lh     = 0      # line height px
+        self.race_active = False
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
@@ -129,19 +146,38 @@ class BaseOverlay:
             pass
 
     def set_visible(self, visible: bool) -> None:
-        root = self.root
-        if root is None:
-            return
-        if visible:
-            root.after(0, root.deiconify)
-        else:
-            root.after(0, root.withdraw)
+        """Show/hide both windows. Thread-safe via cmd_queue."""
+        self.cmd_queue.put(("visible", visible))
+
+    def set_race_active(self, active: bool) -> None:
+        """Show/hide background window. Thread-safe via cmd_queue."""
+        self.cmd_queue.put(("race_active", active))
 
     def run(self) -> None:
-        ov   = self.ov
+        ov = self.ov
+        # Background window — solid colour, no transparency, lower z-order
+        bg = tk.Tk()
+        self.bg_root = bg
+        bg.title(self.title + " BG")
+        bg.overrideredirect(True)
+        bg.attributes("-topmost", True)
+        bg.attributes("-alpha", self.bg_alpha)
+        bg.configure(bg=self.bg_color)
+        bg.geometry(f"+{ov['x']}+{ov['y']}")
+        bg.withdraw()   # hidden until race session becomes active
+        self.bg_canvas = tk.Canvas(bg, bg = self.bg_color, highlightthickness = 0, cursor = "arrow")
+        self.bg_canvas.pack(fill=tk.BOTH, expand=True)
+        self.bg_font = tkfont.Font(
+            root   = bg,
+            family = ov["font"],
+            size   = ov["font_size"],
+            weight = "bold" if ov["bold"] else "normal",
+        )
+        self.bg_canvas.configure(width=1, height=1)
+
+        # Text window — transparent background, text rendered on top
         root = tk.Tk()
         self.root = root
-
         root.title(self.title)
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -178,6 +214,21 @@ class BaseOverlay:
         root.mainloop()
 
     def poll(self) -> None:
+        # Process window commands from other threads
+        try:
+            while True:
+                cmd, arg = self.cmd_queue.get_nowait()
+                if cmd == "visible":
+                    for win in (self.root, self.bg_root):
+                        if win:
+                            win.deiconify() if arg else win.withdraw()
+                elif cmd == "race_active":
+                    self.race_active = arg
+                    if self.bg_root:
+                        self.bg_root.deiconify() if arg else self.bg_root.withdraw()
+        except queue.Empty:
+            pass
+        # Process data
         try:
             while True:
                 self.last = self.queue.get_nowait()
@@ -194,6 +245,15 @@ class BaseOverlay:
         if canvas is None:
             return
         canvas.delete("all")
+
+        if not self.show:
+            # Collapse to 1x1 so the window is invisible but alive
+            canvas.configure(width=1, height=1)
+            self.root.geometry("1x1")
+            if self.bg_root:
+                self.bg_root.geometry("1x1")
+            return
+
         pad    = self.PAD
         lh     = self.lh
         cw     = self.cw
@@ -202,6 +262,7 @@ class BaseOverlay:
         dx, dy = self.SHADOW_DX, self.SHADOW_DY
         fg_def = self.ov["fg"]
         max_col = 0
+        canvas_txt_list = [ ]
         for row_i, segments in enumerate(lines):
             y = pad + row_i * lh
             col = 0
@@ -212,16 +273,28 @@ class BaseOverlay:
                 if text is None:
                     continue
                 x = pad + col * cw
-                # 1. shadow
-                canvas.create_text(x + dx, y + dy, text=text, fill=shadow, font=font, anchor="nw")
-                # 2. main
-                canvas.create_text(x, y, text=text, fill=color or fg_def, font=font, anchor="nw")
+                txt_shadow = ( x + dx, y + dy, { "text": text, "anchor": 'nw', "fill": shadow } )
+                canvas_txt_list.append( txt_shadow )
+                txt_main = ( x, y, { "text": text, "anchor": 'nw', "fill": color or fg_def } )
+                canvas_txt_list.append( txt_main )
                 col += len(text)
                 pass
             max_col = max(max_col, col)
             pass
         w = pad * 2 + max_col * cw + dx
         h = pad * 2 + len(lines) * lh + dy
+        # Keep bg_root same size and position, mirror text onto bg_canvas
+        self.bg_canvas.delete("all")
+        if self.bg_root and self.race_active:
+            x = self.root.winfo_x()
+            y = self.root.winfo_y()
+            self.bg_root.geometry(f"{w}x{h}+{x}+{y}")
+            self.bg_canvas.configure(width=w, height=h)
+            for txt in canvas_txt_list:
+                self.bg_canvas.create_text(txt[0], txt[1], font = self.bg_font, **txt[2])
+        # Output all text lines on main canvas
+        for txt in canvas_txt_list:
+            canvas.create_text(txt[0], txt[1], font = self.font, **txt[2])
         canvas.configure(width=w, height=h)
         self.root.geometry(f"{w}x{h}")
 
@@ -241,6 +314,9 @@ class BaseOverlay:
             x = self.root.winfo_x() + (event.x - self.drag_x)
             y = self.root.winfo_y() + (event.y - self.drag_y)
             self.root.geometry(f"+{x}+{y}")
+            # Move bg_root to same position
+            if self.bg_root:
+                self.bg_root.geometry(f"+{x}+{y}")
 
 
 @dataclass
@@ -290,6 +366,80 @@ class LeaderboardSnapshot:
     track_name: str   = ""
     lap_total:  int   = 0
     updated_at: float = 0.0
+
+
+class LeaderboardState:
+    def __init__(self):
+        self.rows       : dict = { }
+        self.player_idx : int  = 255
+        self.track_name : str  = ""
+        self.lap_total  : int  = 0
+
+    def reset(self) -> None:
+        self.rows.clear()
+        self.player_idx = 255
+
+    def get(self, idx: int) -> ParticipantRow:
+        if idx not in self.rows:
+            self.rows[idx] = ParticipantRow(index=idx)
+        return self.rows[idx]
+
+    def update_main(self, pkt) -> None:
+        self.player_idx = pkt.participantPlayerInfo.participantIndex
+        self.track_name = pkt.session.trackName.decode("utf-8", errors="replace").strip("\x00")
+        self.lap_total  = pkt.session.laps
+
+    def update_leaderboard(self, pkt) -> None:
+        for i, lb in enumerate(pkt.participantsLeaderboard):
+            if lb.status == PARTICIPANT_STATUS_UNUSED:
+                continue
+            row = self.get(i)
+            row.status       = lb.status
+            row.position     = lb.position
+            row.lap          = lb.lapCurrent
+            row.health       = lb.health
+            row.delta_leader = lb.deltaLeader
+
+    def update_timing(self, pkt) -> None:
+        for i, tm in enumerate(pkt.participantsTiming):
+            if i not in self.rows:
+                continue
+            self.rows[i].delta_ahead  = tm.deltaAhead
+            self.rows[i].delta_behind = tm.deltaBehind
+
+    def update_info(self, pkt) -> None:
+        for i, info in enumerate(pkt.participantsInfo):
+            if info.participantIndex == 255:
+                continue
+            idx = info.participantIndex
+            row = self.get(idx)
+            row.name  = info.playerName.decode("utf-8", errors="replace").strip("\x00")
+            row.car_name = info.carName.decode("utf-8", errors="replace").strip("\x00")
+
+    def snapshot(self) -> LeaderboardSnapshot:
+        rows = [ ]
+        for idx, row in self.rows.items():
+            if row.status == PARTICIPANT_STATUS_UNUSED:
+                continue
+            row.is_player = (idx == self.player_idx)
+            rows.append(row)
+
+        # Compute delta_to_player for each row.
+        # delta_leader is ms behind the race leader (0 for leader, >0 for rest).
+        # delta_to_player = participant.delta_leader - player.delta_leader:
+        #   > 0  participant is further behind the leader than the player → behind player
+        #   < 0  participant is closer to the leader than the player → ahead of player
+        player_rows = [r for r in rows if r.is_player]
+        player_delta = player_rows[0].delta_leader if player_rows else 0
+        for row in rows:
+            row.delta_to_player = player_delta - row.delta_leader
+
+        return LeaderboardSnapshot(
+            rows       = rows,
+            track_name = self.track_name,
+            lap_total  = self.lap_total,
+            updated_at = time.monotonic(),
+        )
 
 
 class LeaderboardOverlay(BaseOverlay):
@@ -511,80 +661,6 @@ class AdvInfoOverlay(BaseOverlay):
              s(f" {d.health:3d}%", hp_tag))
         '''
         return lines[:self.max_rows]
-
-
-class LeaderboardState:
-    def __init__(self):
-        self.rows       : dict = { }
-        self.player_idx : int  = 255
-        self.track_name : str  = ""
-        self.lap_total  : int  = 0
-
-    def reset(self) -> None:
-        self.rows.clear()
-        self.player_idx = 255
-
-    def get(self, idx: int) -> ParticipantRow:
-        if idx not in self.rows:
-            self.rows[idx] = ParticipantRow(index=idx)
-        return self.rows[idx]
-
-    def update_main(self, pkt) -> None:
-        self.player_idx = pkt.participantPlayerInfo.participantIndex
-        self.track_name = pkt.session.trackName.decode("utf-8", errors="replace").strip("\x00")
-        self.lap_total  = pkt.session.laps
-
-    def update_leaderboard(self, pkt) -> None:
-        for i, lb in enumerate(pkt.participantsLeaderboard):
-            if lb.status == PARTICIPANT_STATUS_UNUSED:
-                continue
-            row = self.get(i)
-            row.status       = lb.status
-            row.position     = lb.position
-            row.lap          = lb.lapCurrent
-            row.health       = lb.health
-            row.delta_leader = lb.deltaLeader
-
-    def update_timing(self, pkt) -> None:
-        for i, tm in enumerate(pkt.participantsTiming):
-            if i not in self.rows:
-                continue
-            self.rows[i].delta_ahead  = tm.deltaAhead
-            self.rows[i].delta_behind = tm.deltaBehind
-
-    def update_info(self, pkt) -> None:
-        for i, info in enumerate(pkt.participantsInfo):
-            if info.participantIndex == 255:
-                continue
-            idx = info.participantIndex
-            row = self.get(idx)
-            row.name  = info.playerName.decode("utf-8", errors="replace").strip("\x00")
-            row.car_name = info.carName.decode("utf-8", errors="replace").strip("\x00")
-
-    def snapshot(self) -> LeaderboardSnapshot:
-        rows = [ ]
-        for idx, row in self.rows.items():
-            if row.status == PARTICIPANT_STATUS_UNUSED:
-                continue
-            row.is_player = (idx == self.player_idx)
-            rows.append(row)
-
-        # Compute delta_to_player for each row.
-        # delta_leader is ms behind the race leader (0 for leader, >0 for rest).
-        # delta_to_player = participant.delta_leader - player.delta_leader:
-        #   > 0  participant is further behind the leader than the player → behind player
-        #   < 0  participant is closer to the leader than the player → ahead of player
-        player_rows = [r for r in rows if r.is_player]
-        player_delta = player_rows[0].delta_leader if player_rows else 0
-        for row in rows:
-            row.delta_to_player = player_delta - row.delta_leader
-
-        return LeaderboardSnapshot(
-            rows       = rows,
-            track_name = self.track_name,
-            lap_total  = self.lap_total,
-            updated_at = time.monotonic(),
-        )
 
 
 class PlayFabWorker:
@@ -909,7 +985,7 @@ class TailDistState:
         self.motion_positions : dict = {}
         self.lock             = threading.Lock()
         self.ready            = threading.Event()
-        self.poll_interval_s  = 0.1   # default 100ms, updated via set_poll_interval()
+        self.poll_interval_s  = 0.02   # default 20ms, updated via set_poll_interval()
         self.last_signal_t    = 0.0
 
     def update_main(self, pkt) -> None:
@@ -989,7 +1065,7 @@ class TailDistOverlay:
     NAME_MAX_LEN          = 12
     RECT_TTL              = 2.0
     MAX_RIVALS_DEFAULT    = 8
-    POLL_INTERVAL_DEFAULT = 100
+    POLL_INTERVAL_DEFAULT = 20
     MAX_DELTA_MS_DEFAULT  = 15000
 
     def __init__(self, ov: dict, exe_name: str = "Wreckfest2.exe"):
@@ -1000,28 +1076,35 @@ class TailDistOverlay:
         self.color_far    = ov.get("color_far",     self.COLOR_FAR_DEFAULT)
         self.color_near   = ov.get("color_near",    self.COLOR_NEAR_DEFAULT)
         self.outline_color= ov.get("outline_color", self.OUTLINE_COLOR_DEFAULT)
-        self.name_color   = ov.get("name_color",    self.NAME_COLOR_DEFAULT)
-        self.name_shadow  = ov.get("name_shadow",   self.NAME_SHADOW_DEFAULT)
+        self.name_color   = ov.get("fg",       self.NAME_COLOR_DEFAULT)
+        self.name_shadow  = ov.get("shadow",   self.NAME_SHADOW_DEFAULT)
         self.max_rivals   = int(ov.get("max_rivals",    self.MAX_RIVALS_DEFAULT))
         self.poll_interval= int(ov.get("poll_interval", self.POLL_INTERVAL_DEFAULT))
         self.max_delta_ms = int(ov.get("max_delta_ms",  self.MAX_DELTA_MS_DEFAULT))
-        self.alpha        = float(ov.get("alpha", 0.5))
+        self.bg_alpha     = float(ov.get("bg_alpha", 0.5))
+        self.alpha        = float(ov.get("alpha", 1.0))
         self.transparent  = bool( ov.get("transparent", True))
         self.chroma_key   = ov.get("chroma_key", "#000005")
         self.bg           = self.chroma_key if self.transparent else ov.get("bg", "#000000")
         self.font_family  = ov.get("font", "Terminal")
         self.font_size    = int(ov.get("font_size", 14))
+        self.font_weight  = "bold" if ov.get("bold", True) else "normal"
 
         self.game_rect    = None
         self.rect_age     = 0.0
         self.tail_state   = None   # set via attach() before use
         self.lb_state     = None   # set via attach() before use
         self.root         = None
+        self.bg_root      = None
         self.canvas       = None
+        self.bg_canvas = None
         self.tk_font      = None
+        self.cmd_queue    = queue.Queue()
 
         self.proc = Win64Process()
         self.proc.find_process(exe_name)
+        
+        self.race_active = False
 
         self.thread = threading.Thread(target = self.run, daemon = True)
         self.thread.start()
@@ -1037,30 +1120,38 @@ class TailDistOverlay:
         tail_state.set_poll_interval(self.poll_interval)
 
     def set_visible(self, visible: bool) -> None:
-        root = self.root
-        if root is None:
-            return
-        if visible:
-            root.after(0, root.deiconify)
-        else:
-            root.after(0, root.withdraw)
+        self.cmd_queue.put(("visible", visible))
 
     # ------------------------------------------------------------------
     # tkinter thread
     # ------------------------------------------------------------------
 
     def run(self) -> None:
+        # Ellipse window — drawn at ellipse_alpha
+        bg = tk.Tk()
+        self.bg_root = bg
+        bg.title("WF2 TailDist BG")
+        bg.overrideredirect(True)
+        bg.attributes("-topmost", True)
+        bg.attributes("-alpha", self.bg_alpha)
+        bg.configure(bg=self.chroma_key)
+        if self.transparent:
+            bg.attributes("-transparentcolor", self.chroma_key)
+        self.bg_font = tkfont.Font(root = bg, family = self.font_family, size = self.font_size, weight = self.font_weight)
+        self.bg_canvas = tk.Canvas(bg, bg = self.chroma_key, highlightthickness = 0, cursor = "arrow")
+        self.bg_canvas.pack(fill=tk.BOTH, expand=True)
+        # Text window — transparent bg, names at self.alpha
         root = tk.Tk()
         self.root = root
         root.title("WF2 TailDist")
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         root.attributes("-alpha", self.alpha)
-        root.configure(bg=self.bg)
+        root.configure(bg=self.chroma_key)
         if self.transparent:
             root.attributes("-transparentcolor", self.chroma_key)
-        self.tk_font = tkfont.Font(root = root, family = self.font_family, size = self.font_size)
-        self.canvas = tk.Canvas(root, bg = self.bg, highlightthickness = 0, cursor = "arrow")
+        self.tk_font = tkfont.Font(root = root, family = self.font_family, size = self.font_size, weight = self.font_weight)
+        self.canvas = tk.Canvas(root, bg = self.chroma_key, highlightthickness = 0, cursor = "arrow")
         self.canvas.pack(fill = tk.BOTH, expand = True)
         root.bind("<ButtonPress-1>", self.drag_start)
         root.bind("<B1-Motion>",     self.drag_motion)
@@ -1076,12 +1167,23 @@ class TailDistOverlay:
             x = self.root.winfo_x() + (event.x - self.drag_x)
             y = self.root.winfo_y() + (event.y - self.drag_y)
             self.root.geometry(f"+{x}+{y}")
+            if self.bg_root:
+                self.bg_root.geometry(f"+{x}+{y}")
 
     # ------------------------------------------------------------------
     # Polling
     # ------------------------------------------------------------------
 
     def poll(self) -> None:
+        try:
+            while True:
+                cmd, arg = self.cmd_queue.get_nowait()
+                if cmd == "visible":
+                    for win in (self.root, self.bg_root):
+                        if win:
+                            win.deiconify() if arg else win.withdraw()
+        except queue.Empty:
+            pass
         if self.tail_state is not None and self.lb_state is not None:
             if self.tail_state.ready.is_set():
                 raw = self.tail_state.take_snapshot()
@@ -1115,9 +1217,14 @@ class TailDistOverlay:
             return
         gl, gt, gw, gh = self.game_rect
         y = gt + gh - self.canvas_h
-        self.root.geometry(f"{gw}x{self.canvas_h}+{gl}+{y}")
+        geom = f"{gw}x{self.canvas_h}+{gl}+{y}"
+        self.root.geometry(geom)
+        if self.bg_root:
+            self.bg_root.geometry(geom)
         if self.canvas:
-            self.canvas.configure(width = gw, height = self.canvas_h)
+            self.canvas.configure(width=gw, height=self.canvas_h)
+        if self.bg_canvas:
+            self.bg_canvas.configure(width=gw, height=self.canvas_h)
 
     # ------------------------------------------------------------------
     # Snapshot computation (runs in overlay thread)
@@ -1241,8 +1348,12 @@ class TailDistOverlay:
         radius_m = snap.radius_m
         font     = self.tk_font
 
-        # Pass 1: ellipses, farthest first (snap.rivals already sorted)
-        for rival in snap.rivals:
+        self.bg_canvas.delete("all")
+        txt_shadow_list = [ ]
+        txt_main_list = [ ]
+
+        # Pass 1: ellipses on bg_canvas (or canvas if no bg window) and prepare name text list
+        for rival in reversed(snap.rivals):
             cx = self.angle_to_x(rival.angle_deg, canvas_w)
             vert_r, horiz_r = self.dist_to_radii(rival.dist_m, radius_m)
             color = self.dist_to_color(rival.dist_m, radius_m)
@@ -1250,19 +1361,25 @@ class TailDistOverlay:
             y0 = h  - vert_r
             x1 = cx + horiz_r
             y1 = h  + vert_r    # lower half clipped by canvas bottom
-            canvas.create_oval(x0, y0, x1, y1, fill=color, outline=self.outline_color)
+            self.bg_canvas.create_oval(x0, y0, x1, y1, fill=color, outline=self.outline_color)
+            ny = h - vert_r   # top of ellipse = name baseline
+            name = rival.name[:self.NAME_MAX_LEN]
+            txt_shadow_list.append( (cx + 1, ny + 1, { "text": name, "fill": self.name_shadow, "anchor": 'n' } ) )
+            txt_main_list.append(   (cx    , ny    , { "text": name, "fill": self.name_color , "anchor": 'n' } ) )
 
-        # Pass 2: names, farthest first
-        for rival in snap.rivals:
-            cx        = self.angle_to_x(rival.angle_deg, canvas_w)
-            vert_r, _ = self.dist_to_radii(rival.dist_m, radius_m)
-            color     = self.dist_to_color(rival.dist_m, radius_m)
-            name      = rival.name[:self.NAME_MAX_LEN]
-            ny        = h - vert_r   # top of ellipse = name baseline
-            # shadow pass then main pass for readability
-            # anchor="n" places text top at ny (top edge of ellipse)
-            canvas.create_text(cx + 1, ny + 1, text=name, fill=self.name_shadow, font=font, anchor="n")
-            canvas.create_text(cx,     ny,     text=name, fill=self.name_color,  font=font, anchor="n")
+        # Pass 2: Output text shadows on bg_root and root
+        for txt in reversed(txt_shadow_list):
+            self.bg_canvas.create_text( txt[0], txt[1], font = self.bg_font, **txt[2] )
+            self.canvas.create_text(    txt[0], txt[1], font = self.tk_font, **txt[2] )
+
+        # Pass 3: Output text on bg_root
+        for txt in reversed(txt_main_list):
+            self.bg_canvas.create_text( txt[0], txt[1], font = self.bg_font, **txt[2] )
+
+        # Pass 4: Output text on root
+        for txt in reversed(txt_main_list):
+            self.canvas.create_text( txt[0], txt[1], font = self.tk_font, **txt[2] )
+
 
 # ===========================================================================================
 

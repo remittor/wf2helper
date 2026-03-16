@@ -6,13 +6,14 @@ keys:
 
 overlays:
     leaderboard:
-        max_rows: 26       # max participants shown + header lines
-        x: 20              # screen position, pixels from left
-        y: 400             # screen position, pixels from top
-        alpha: 0.82        # transparency: 0.0 = invisible, 1.0 = opaque
-        transparent: true   # true = fully transparent background (Windows only)
-        chroma_key: "#000005"
-        bg: "#000001"        # background colour (ignored when transparent: true)
+        show: true
+        max_rows: 26           # max participants shown + header lines
+        x: 20                  # screen position, pixels from left
+        y: 400                 # screen position, pixels from top
+        bg_alpha: 0.3          # opacity of background panel (shown during COUNTDOWN/RACING only)
+        bg_color: "#111111"    # background panel colour        # transparency: 0.0 = invisible, 1.0 = opaque
+        alpha: 0.82
+        bg: "#000001"          # background colour (ignored when transparent: true)
         font_size: 9
         font: "Fixedsys"
         bold: false
@@ -22,48 +23,43 @@ overlays:
         fg_dnf: "#888888"
 
     advinfo:
+        show: true
         max_rows: 20
         x: 20
         y: 820
+        bg_alpha: 0.3
+        bg_color: "#111111"
         alpha: 0.82
-        transparent: true
-        chroma_key: "#000005"
         bg: "#000001"
         font_size: 9
         font: "Fixedsys"
         bold: false
         shadow: "#000000"
         fg: "#ffffff"
-        fg_player: "#ffffff"  # used for race timer
+        fg_player: "#ffffff"
 
     taildist:
-        # --- Geometry ---
-        max_view_radius: 80.0    # rivals beyond this distance (m) are ignored
-        fov: 90                  # horizontal field of view in degrees (120 = comfortable)
-        canvas_height: 200       # canvas height in pixels
-        marker_width: 0.5        # horiz_r = vert_r * marker_width
-        max_rivals: 8            # max number of rivals shown (closest ones kept)
-        max_delta_ms: 15000      # ignore rivals more than this ms behind (15 sec)
-        poll_interval: 100       # overlay redraw interval in ms (lower = smoother but more CPU)
-
-        # --- Colours (gradient far->near) ---
-        color_far:     "#e0e0e0"   # colour at max_view_radius * 80% (farthest visible)
-        color_near:    "#0055ff"   # colour at distance 0 (closest)
-        outline_color: "#000000"   # ellipse outline colour
-        name_color:    "#ffffff"   # rival name text colour
-        name_shadow:   "#000000"   # rival name text shadow colour
-
+        show: true
         # --- Window ---
-        alpha: 0.5
-        transparent: true
-        chroma_key: "#000005"
-        bg: "#000001"
+        canvas_height: 200       # canvas height in pixels
+        bg_alpha: 0.5            # for output ellipses
+        alpha: 1.0               # for output text
         font_size: 14
         font: "Terminal"
         bold: false
-        shadow: "#000000"
-        fg: "#ffffff"
-        fg_player: "#ffffff"  # used for race timer
+        shadow: "#000000"        # rival name text shadow colour
+        fg: "#ffffff"            # rival name text colour
+        # --- Colours (gradient far->near) ---
+        color_far:     "#e0e0e0" # colour at max_view_radius * 80% (farthest visible)
+        color_near:    "#0055ff" # colour at distance 0 (closest)
+        outline_color: "#000000" # ellipse outline colour
+        # --- Geometry ---
+        max_view_radius: 80.0    # rivals beyond this distance (m) are ignored
+        fov: 90                  # horizontal field of view in degrees (120 = comfortable)
+        marker_width: 0.5        # horiz_r = vert_r * marker_width
+        max_rivals: 8            # max number of rivals shown (closest ones kept)
+        max_delta_ms: 15000      # ignore rivals more than this ms behind (15 sec)
+        poll_interval: 20        # overlay redraw interval in ms (lower = smoother but more CPU)
 
 # overlays.taildist section above activates the TailDist overlay.
 # The window is positioned automatically at the bottom of the game window.

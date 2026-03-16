@@ -679,23 +679,24 @@ def main():
     
     current_car = ""
     game_was_active = False
+    race_was_active = False
     
-    def check_game_acvive(frame):
+    def check_game_active(frame):
         nonlocal game_was_active
         game_active = wnd_chk.is_active()
         if game_active != game_was_active:
             game_was_active = game_active
             if game_active:
-                print("[WF2] Game window active — shifting enabled")
+                print("[WF2] Game window active +++++")
             else:
-                print("[WF2] Game window inactive — shifting suspended")
+                print("[WF2] Game window inactive")
             for ov in (lb_ov, adv_ov, tail_ov):
                 if ov:
                     ov.set_visible(game_active)
         return game_active
     
     def handle_main(frame):
-        nonlocal current_car, game_was_active
+        nonlocal current_car, game_was_active, race_was_active
         if monitor.update(frame):
             shifter.reset()
             stats.reset()
@@ -707,6 +708,16 @@ def main():
             #    adv_state.reset()
             current_car = ""
 
+        hdr = frame.header
+        ses = frame.session
+        ses_active = (ses.status == SESSION_STATUS_COUNTDOWN) or (ses.status == SESSION_STATUS_RACING)
+        race_active = ses_active and (hdr.statusFlags & GAME_STATUS_IN_RACE) != 0 and not monitor.paused
+        if race_active != race_was_active:
+            race_was_active = race_active
+            for ov in (lb_ov, adv_ov):
+                if ov:
+                    ov.set_race_active(race_active)
+
         if monitor.paused:
             return
 
@@ -716,7 +727,7 @@ def main():
             shifter.reconfigure(ShifterConfig(cfg, car_name))
             print(f"[WF2] Car: {car_name}")
 
-        game_active = check_game_acvive(frame)
+        game_active = check_game_active(frame)
         shifted = 0
         if game_active and opt.gearauto:
             shifted = shifter.process(frame)
@@ -743,7 +754,7 @@ def main():
             while True:
                 pkt_type, pkt = receiver.recv_any()
                 if pkt is None:
-                    check_game_acvive(None)
+                    check_game_active(None)
                     continue
                 if pkt_type == MAIN_PACKET_TYPE:
                     handle_main(pkt)
