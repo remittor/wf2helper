@@ -1341,6 +1341,7 @@ class TailDistOverlay:
         if canvas is None:
             return
         canvas.delete("all")
+        self.bg_canvas.delete("all")
 
         if not snap.rivals or self.game_rect is None:
             return
@@ -1350,7 +1351,6 @@ class TailDistOverlay:
         radius_m = snap.radius_m
         font     = self.tk_font
 
-        self.bg_canvas.delete("all")
         txt_shadow_list = [ ]
         txt_main_list = [ ]
 
