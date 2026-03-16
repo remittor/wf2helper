@@ -155,25 +155,26 @@ class BaseOverlay:
 
     def run(self) -> None:
         ov = self.ov
-        # Background window — solid colour, no transparency, lower z-order
-        bg = tk.Tk()
-        self.bg_root = bg
-        bg.title(self.title + " BG")
-        bg.overrideredirect(True)
-        bg.attributes("-topmost", True)
-        bg.attributes("-alpha", self.bg_alpha)
-        bg.configure(bg=self.bg_color)
-        bg.geometry(f"+{ov['x']}+{ov['y']}")
-        bg.withdraw()   # hidden until race session becomes active
-        self.bg_canvas = tk.Canvas(bg, bg = self.bg_color, highlightthickness = 0, cursor = "arrow")
-        self.bg_canvas.pack(fill=tk.BOTH, expand=True)
-        self.bg_font = tkfont.Font(
-            root   = bg,
-            family = ov["font"],
-            size   = ov["font_size"],
-            weight = "bold" if ov["bold"] else "normal",
-        )
-        self.bg_canvas.configure(width=1, height=1)
+        if self.bg_alpha > 0.0:
+            # Background window — solid colour, no transparency, lower z-order
+            bg = tk.Tk()
+            self.bg_root = bg
+            bg.title(self.title + " BG")
+            bg.overrideredirect(True)
+            bg.attributes("-topmost", True)
+            bg.attributes("-alpha", self.bg_alpha)
+            bg.configure(bg=self.bg_color)
+            bg.geometry(f"+{ov['x']}+{ov['y']}")
+            bg.withdraw()   # hidden until race session becomes active
+            self.bg_canvas = tk.Canvas(bg, bg = self.bg_color, highlightthickness = 0, cursor = "arrow")
+            self.bg_canvas.pack(fill=tk.BOTH, expand=True)
+            self.bg_font = tkfont.Font(
+                root   = bg,
+                family = ov["font"],
+                size   = ov["font_size"],
+                weight = "bold" if ov["bold"] else "normal",
+            )
+            self.bg_canvas.configure(width=1, height=1)
 
         # Text window — transparent background, text rendered on top
         root = tk.Tk()
@@ -284,7 +285,8 @@ class BaseOverlay:
         w = pad * 2 + max_col * cw + dx
         h = pad * 2 + len(lines) * lh + dy
         # Keep bg_root same size and position, mirror text onto bg_canvas
-        self.bg_canvas.delete("all")
+        if self.bg_root:
+            self.bg_canvas.delete("all")
         if self.bg_root and self.race_active:
             x = self.root.winfo_x()
             y = self.root.winfo_y()
