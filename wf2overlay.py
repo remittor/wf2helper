@@ -792,9 +792,6 @@ class AdvInfoState:
             if data.pb_time > 1:
                 if tm.lapTimeBest < data.pb_time and tm.lapTimeBest > 0:
                     data.pb_time_new = tm.lapTimeBest
-                if tm.lapTimeCurrent < data.pb_time_new and tm.lapTimeCurrent > 8000 and data.race_finished:
-                    data.pb_time_new = tm.lapTimeCurrent
-                    data.lap_time_best = data.pb_time_new
                 if data.pb_time_new > 0 and data.pb_time_new < data.pb_time and data.rank_page:
                     page_first_time = data.rank_page[0][1]  # [ ( rank, score_ms ) ]
                     if data.pb_time_new <= page_first_time:
