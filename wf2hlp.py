@@ -28,7 +28,7 @@ print(f"Python version: {sys.version}")
 from pynput.keyboard import Controller, KeyCode
 
 from wf2telemetry import *
-from wf2overlay import create_overlays, LeaderboardState, AdvInfoState, TailDistState
+from wf2overlay import create_overlays, LeaderboardState, AdvInfoState, TailDistState, CarPhysState
 from win64proc import Win64Process
 
 import yaml
@@ -651,7 +651,7 @@ def main():
     wnd_chk  = ActiveWindowChecker(keyword="Wreckfest", cache_s = 0.2)
     slip_res = SlippageResearcher() if opt.slippage else None
 
-    lb_ov, adv_ov, tail_ov = create_overlays(cfg) if opt.info else (None, None, None)
+    lb_ov, adv_ov, tail_ov, car_phys_ov = create_overlays(cfg) if opt.info else (None, None, None, None)
     taildist_cfg = cfg.get("overlays", {}).get("taildist", {})
     radius_m     = float(taildist_cfg.get("max_view_radius", 250.0))
     lb_state     = LeaderboardState() if lb_ov  else None
@@ -659,6 +659,7 @@ def main():
     tail_state   = TailDistState(radius_m) if tail_ov else None
     if tail_ov and tail_state and lb_state:
         tail_ov.attach(tail_state, lb_state)
+    car_phys_state = CarPhysState() if car_phys_ov else None
 
     if slip_res:
         print(
@@ -690,7 +691,7 @@ def main():
                 print("[WF2] Game window active +++++")
             else:
                 print("[WF2] Game window inactive")
-            for ov in (lb_ov, adv_ov, tail_ov):
+            for ov in (lb_ov, adv_ov, tail_ov, car_phys_ov):
                 if ov:
                     ov.set_visible(game_active)
         return game_active
@@ -743,13 +744,17 @@ def main():
             adv_state.renew_from_main(frame, traction_state = tr)
             adv_ov.push(adv_state.get_data())
 
+        if car_phys_ov and car_phys_state:
+            car_phys_state.update(frame)
+            car_phys_ov.push(car_phys_state.get_data())
+
         if tail_state:
             tail_state.update_main(frame)
 
         stats.show_stat(frame, forced = shifted > 0)
 
     try:
-        if lb_ov or adv_ov:
+        if lb_ov or adv_ov or car_phys_ov:
             # Use recv_any() to receive all packet types
             while True:
                 pkt_type, pkt = receiver.recv_any()
