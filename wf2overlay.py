@@ -1133,6 +1133,8 @@ class TailDistState:
         self.player_z         = 0.0
         self.heading_x        = 0.0
         self.heading_z        = 1.0
+        self.velloc_x         = 0.0
+        self.velloc_z         = 0.0
         self.motion_positions : dict = {}
         self.lock             = threading.Lock()
         self.ready            = threading.Event()
@@ -1151,6 +1153,8 @@ class TailDistState:
             self.player_z  = ori.positionZ
             self.heading_x = 2.0 * (qx * qz + qw * qy)
             self.heading_z = 1.0 - 2.0 * (qx * qx + qy * qy)
+            self.velloc_x = pkt.carPlayer.velocity.velocityLocalX
+            self.velloc_z = pkt.carPlayer.velocity.velocityLocalZ
 
     def set_poll_interval(self, interval_ms: int) -> None:
         """Configure minimum interval between ready signals, in milliseconds."""
@@ -1182,6 +1186,8 @@ class TailDistState:
                 "player_z":         self.player_z,
                 "heading_x":        self.heading_x,
                 "heading_z":        self.heading_z,
+                "velloc_x":         self.velloc_x,
+                "velloc_z":         self.velloc_z,
                 "motion_positions": dict(self.motion_positions),
             }
 
@@ -1394,6 +1400,11 @@ class TailDistOverlay:
         positions = raw["motion_positions"]
         r2        = radius_m * radius_m
 
+        vx = raw['velloc_x']
+        vz = raw['velloc_z']
+        player_v_mag = math.sqrt(vx * vx + vz * vz)
+        player_v_rad = math.atan2(vx, vz) if player_v_mag > 0.04 else 0.0 
+
         name_map   = { }
         behind_set = set()
         player_idx = lb_state.player_idx
@@ -1428,7 +1439,7 @@ class TailDistOverlay:
                 # Exclude such rivals regardless of lap-time delta.
                 if dot >= 0.0:
                     continue
-                angle_deg = -math.degrees(math.atan2(cross, dot))
+                angle_deg = -math.degrees(math.atan2(cross, dot) + player_v_rad)
             else:
                 angle_deg = 0.0
             name = name_map.get(idx, f"P{idx:02d}")
