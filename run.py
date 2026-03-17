@@ -31,7 +31,7 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
 
     if not argv or not argv[0]:
-        run_script("wf2hlp.py", [ "-i" ])
+        run_script("wf2hlp.py")
 
     arg1 = argv[0]
     if arg1.endswith(".py"):

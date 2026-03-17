@@ -1,1 +1,1 @@
-python311\python.exe wf2hlp.py -i
+python311\python.exe wf2hlp.py
