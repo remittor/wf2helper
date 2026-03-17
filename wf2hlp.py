@@ -20,18 +20,19 @@ import threading
 import queue
 import ctypes
 import ctypes.wintypes
-
-from optparse import OptionParser
+import subprocess
 
 print(f"Python version: {sys.version}")
 
 from pynput.keyboard import Controller, KeyCode
 
 from wf2telemetry import *
-from wf2overlay import create_overlays, LeaderboardState, AdvInfoState, TailDistState, CarPhysState
+from wf2overlay import *
 from win64proc import Win64Process
 
 import yaml
+
+EXE_NAME = "Wreckfest2.exe"
 
 DEFAULT_CONFIG_PATH = "wf2hlp.yaml"
 
@@ -520,9 +521,7 @@ class ActiveWindowChecker:
     """
     Checks whether Wreckfest2.exe is running AND its window is in the foreground.
     """
-    EXE_NAME = "Wreckfest2.exe"
-
-    def __init__(self, keyword: str = "Wreckfest", cache_s: float = 0.5):
+    def __init__(self, keyword: str = "Wreckfest |", cache_s: float = 0.5):
         self.keyword = keyword
         self.cache_s = cache_s
         self.last_check  = 0.0
@@ -540,7 +539,7 @@ class ActiveWindowChecker:
     def check(self) -> bool:
         if not self.proc.is_alive():
             self.proc.close_process()
-            if not self.proc.find_process(self.EXE_NAME):
+            if not self.proc.find_process(EXE_NAME):
                 return False
         return self.proc.is_foreground()
 
@@ -556,14 +555,11 @@ def find_telemetry_configs() -> list:
 
 def is_game_running() -> bool:
     """Return True if Wreckfest2.exe process is running."""
-    import subprocess
     try:
-        out = subprocess.check_output(
-            ["tasklist", "/FI", "IMAGENAME eq Wreckfest2.exe", "/NH"],
-            text=True,
-            creationflags=0x08000000,  # CREATE_NO_WINDOW — no console flash
-        )
-        return "Wreckfest2.exe" in out
+        creationflags = 0x08000000  # CREATE_NO_WINDOW — no console flash
+        cmd = [ "tasklist", "/FI", "IMAGENAME eq "+EXE_NAME, "/NH" ]
+        out = subprocess.check_output(cmd, text = True, creationflags = creationflags)
+        return EXE_NAME.lower() in out.lower()
     except Exception:
         return False
 
@@ -633,161 +629,195 @@ def check_and_patch_telemetry_config(udp_port: int) -> bool:
     return ok
 
 
-def main():
-    op = OptionParser()
-    op.add_option("-c", "--config", dest="config",  default=DEFAULT_CONFIG_PATH, help=f"Config YAML file (default: {DEFAULT_CONFIG_PATH})")
-    op.add_option("-g", "--gearauto", dest="gearauto", action="store_true", default=False, help="AutoShifter")
-    op.add_option("",   "--slippage", dest="slippage", action="store_true", default=False, help="Research traction loss events")
-    op.add_option("-S", "--stat", dest="stat", action="store_true", default=False, help="Show stat info every second")
-    op.add_option("-i", "--info", dest="info", action="store_true", default=False, help="Show overlay with info")
-    op.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False, help="Extra debug output")
-    opt, _ = op.parse_args()
+class WF2Helper:
+    def __init__(self, cfg_file = None):
+        self.cfg = load_config(cfg_file if cfg_file else DEFAULT_CONFIG_PATH)
+        self.gearauto = False
+        self.show_stat = False
+        self.slippage = False
+        self.frame = None
+        
+    def init(self):    
+        self.scfg     = ShifterConfig(self.cfg)
+        self.shifter  = AutoShifter(self.scfg)
+        self.stats    = StatsPrinter(interval_s = 1.0 if self.show_stat else None)
+        self.monitor  = SessionMonitor()
+        self.wnd_chk  = ActiveWindowChecker(keyword = "Wreckfest |", cache_s = 0.2)
+        self.slip_res = SlippageResearcher() if self.slippage else None
+        self.init_overlays()
 
-    cfg      = load_config(opt.config)
-    scfg     = ShifterConfig(cfg)
-    shifter  = AutoShifter(scfg)
-    stats    = StatsPrinter(interval_s = 1.0 if opt.stat else None)
-    monitor  = SessionMonitor()
-    wnd_chk  = ActiveWindowChecker(keyword="Wreckfest", cache_s = 0.2)
-    slip_res = SlippageResearcher() if opt.slippage else None
+    def init_overlays(self):
+        ovs = self.cfg.get("overlays", { })
+        self.ov_list = [ ]
+        self.lb_ov = None
+        self.adv_ov = None
+        self.car_phys_ov = None
+        self.car_phys_state = None
+        self.tail_ov = None
 
-    lb_ov, adv_ov, tail_ov, car_phys_ov = create_overlays(cfg) if opt.info else (None, None, None, None)
-    taildist_cfg = cfg.get("overlays", {}).get("taildist", {})
-    radius_m     = float(taildist_cfg.get("max_view_radius", 250.0))
-    lb_state     = LeaderboardState() if lb_ov  else None
-    adv_state    = AdvInfoState()     if adv_ov else None
-    tail_state   = TailDistState(radius_m) if tail_ov else None
-    if tail_ov and tail_state and lb_state:
-        tail_ov.attach(tail_state, lb_state)
-    car_phys_state = CarPhysState() if car_phys_ov else None
+        lb_ov_cfg = ovs.get("leaderboard")
+        if lb_ov_cfg is not None:
+            self.lb_ov_cfg = get_ov_cfg(lb_ov_cfg)
+            self.lb_ov = LeaderboardOverlay(self.lb_ov_cfg)
+            self.lb_state = LeaderboardState()
+            self.ov_list.append(self.lb_ov)
 
-    if slip_res:
-        print(
-            f"[WF2] Slippage research ON\n"
-            f"      slip_ratio threshold : {SlippageResearcher.SLIP_RATIO_THRESHOLD}\n"
-            f"      rpm rise threshold   : {SlippageResearcher.RPM_RISE_THRESHOLD} rpm/s\n"
-            f"      print cooldown       : {SlippageResearcher.PRINT_COOLDOWN_S}s\n"
-        )
+        adv_ov_cfg = ovs.get("advinfo")
+        if adv_ov_cfg is not None:
+            self.adv_ov_cfg = get_ov_cfg(adv_ov_cfg)
+            self.adv_ov = AdvInfoOverlay(self.adv_ov_cfg)
+            self.adv_state = AdvInfoState()
+            self.ov_list.append(self.adv_ov)
 
-    udp_port = cfg.get("udp_port", 23123)
-    if not check_and_patch_telemetry_config(udp_port):
-        print("[WF2] Fix telemetry config and restart. Exiting.")
-        return
+        car_phys_cfg = ovs.get("car_phys")
+        if car_phys_cfg is not None:
+            self.car_phys_cfg = get_ov_cfg(car_phys_cfg)
+            self.car_phys_ov = CarPhysOverlay(self.car_phys_cfg)
+            self.car_phys_state = CarPhysState()
+            self.ov_list.append(self.car_phys_ov)
 
-    receiver = WF2TelemetryReceiver(port=udp_port)
-    print(f"[WF2] Auto-gear active  {scfg.describe()}")
-    print(f"[WF2] Ctrl+C to quit\n")
-    
-    current_car = ""
-    game_was_active = False
-    race_was_active = False
-    
-    def check_game_active(frame):
-        nonlocal game_was_active
-        game_active = wnd_chk.is_active()
-        if game_active != game_was_active:
-            game_was_active = game_active
+        tail_cfg = ovs.get("taildist")
+        if tail_cfg is not None and self.lb_state:
+            self.tail_cfg = get_ov_cfg(tail_cfg)
+            self.tail_ov = TailDistOverlay(self.tail_cfg)
+            radius_m = float(self.tail_cfg.get("max_view_radius", 250.0))
+            self.tail_state = TailDistState(radius_m)
+            self.tail_ov.attach(self.tail_state, self.lb_state)
+            self.ov_list.append(self.tail_ov)
+
+    def check_game_active(self):
+        game_active = self.wnd_chk.is_active()
+        if game_active != self.game_was_active:
+            self.game_was_active = game_active
             if game_active:
                 print("[WF2] Game window active +++++")
             else:
                 print("[WF2] Game window inactive")
-            for ov in (lb_ov, adv_ov, tail_ov, car_phys_ov):
-                if ov:
-                    ov.set_visible(game_active)
+            for ov in self.ov_list:
+                ov.set_visible(game_active)
         return game_active
     
-    def handle_main(frame):
-        nonlocal current_car, game_was_active, race_was_active
-        if monitor.update(frame):
-            shifter.reset()
-            stats.reset()
-            if slip_res:
-                slip_res.reset()
-            if lb_state:
-                lb_state.reset()
-            #if adv_state:
-            #    adv_state.reset()
-            current_car = ""
+    def handle_main(self):
+        frame = self.frame
+        if self.monitor.update(frame):
+            self.shifter.reset()
+            self.stats.reset()
+            self.slip_res.reset() if self.slip_res else None
+            self.lb_state.reset() if self.lb_state else None
+            #adv_state.reset() if self.adv_state else None
+            self.current_car = ""
 
         hdr = frame.header
         ses = frame.session
         ses_active = (ses.status == SESSION_STATUS_COUNTDOWN) or (ses.status == SESSION_STATUS_RACING)
-        race_active = ses_active and (hdr.statusFlags & GAME_STATUS_IN_RACE) != 0 and not monitor.paused
-        if race_active != race_was_active:
-            race_was_active = race_active
-            for ov in (lb_ov, adv_ov):
-                if ov:
-                    ov.set_race_active(race_active)
+        race_active = ses_active and (hdr.statusFlags & GAME_STATUS_IN_RACE) != 0 and not self.monitor.paused
+        if race_active != self.race_was_active:
+            self.race_was_active = race_active
+            for ov in self.ov_list:
+                ov.set_race_active(race_active)
 
-        if monitor.paused:
+        if self.monitor.paused:
             return
 
         car_name = frame.participantPlayerInfo.carName.decode("utf-8", errors="replace").strip("\x00")
-        if car_name != current_car:
-            current_car = car_name
-            shifter.reconfigure(ShifterConfig(cfg, car_name))
+        if car_name != self.current_car:
+            self.current_car = car_name
+            if self.gearauto:
+                self.shifter.reconfigure(ShifterConfig(self.cfg, car_name))
             print(f"[WF2] Car: {car_name}")
 
-        game_active = check_game_active(frame)
+        game_active = self.check_game_active()
         shifted = 0
-        if game_active and opt.gearauto:
-            shifted = shifter.process(frame)
+        if game_active and self.gearauto:
+            shifted = self.shifter.process(frame)
 
-        if slip_res:
-            slip_res.process(frame)
+        if self.slip_res:
+            self.slip_res.process(frame)
 
-        if lb_state:
-            lb_state.update_main(frame)
+        if self.lb_state:
+            self.lb_state.update_main(frame)
 
-        if adv_ov and adv_state:
-            tr = shifter.traction.state if opt.gearauto else ""
-            adv_state.renew_from_main(frame, traction_state = tr)
-            adv_ov.push(adv_state.get_data())
+        if self.adv_ov and self.adv_state:
+            tr = self.shifter.traction.state if self.gearauto else ""
+            self.adv_state.renew_from_main(frame, traction_state = tr)
+            self.adv_ov.push(self.adv_state.get_data())
 
-        if car_phys_ov and car_phys_state:
-            car_phys_state.update(frame)
-            car_phys_ov.push(car_phys_state.get_data())
+        if self.car_phys_ov and self.car_phys_state:
+            self.car_phys_state.update(frame)
+            self.car_phys_ov.push(self.car_phys_state.get_data())
 
-        if tail_state:
-            tail_state.update_main(frame)
+        if self.tail_state:
+            self.tail_state.update_main(frame)
 
-        stats.show_stat(frame, forced = shifted > 0)
+        self.stats.show_stat(frame, forced = shifted > 0)
 
-    try:
-        if lb_ov or adv_ov or car_phys_ov:
-            # Use recv_any() to receive all packet types
+    def run(self):
+        if self.slip_res:
+            print(
+                f"[WF2] Slippage research ON\n"
+                f"      slip_ratio threshold : {SlippageResearcher.SLIP_RATIO_THRESHOLD}\n"
+                f"      rpm rise threshold   : {SlippageResearcher.RPM_RISE_THRESHOLD} rpm/s\n"
+                f"      print cooldown       : {SlippageResearcher.PRINT_COOLDOWN_S}s\n"
+            )
+        self.udp_port = self.cfg.get("udp_port", 23123)
+        if not check_and_patch_telemetry_config(self.udp_port):
+            print("[WF2] Fix telemetry config and restart. Exiting.")
+            return False
+
+        self.receiver = WF2TelemetryReceiver(port = self.udp_port)
+        if self.gearauto:
+            print(f"[WF2] Auto-gear active  {self.scfg.describe()}")
+        print(f"[WF2] Ctrl+C to quit\n")
+    
+        self.current_car = ""
+        self.game_was_active = False
+        self.race_was_active = False
+        try:
             while True:
-                pkt_type, pkt = receiver.recv_any()
+                pkt_type, pkt = self.receiver.recv_any()
+                self.frame = pkt
                 if pkt is None:
-                    check_game_active(None)
+                    self.check_game_active()
                     continue
                 if pkt_type == MAIN_PACKET_TYPE:
-                    handle_main(pkt)
+                    self.handle_main()
                 elif pkt_type == PARTICIPANTS_LEADERBOARD_PACKET_TYPE:
-                    if lb_state and lb_ov:
-                        lb_state.update_leaderboard(pkt)
-                        lb_ov.push(lb_state.snapshot())
+                    if self.lb_ov:
+                        self.lb_state.update_leaderboard(pkt)
+                        self.lb_ov.push(self.lb_state.snapshot())
                 elif pkt_type == PARTICIPANTS_TIMING_PACKET_TYPE:
-                    if lb_state:
-                        lb_state.update_timing(pkt)
+                    if self.lb_state:
+                        self.lb_state.update_timing(pkt)
                 elif pkt_type == PARTICIPANTS_MOTION_PACKET_TYPE:
-                    if tail_state is not None and pkt is not None:
-                        tail_state.update_motion(pkt)
+                    if self.tail_state is not None and pkt is not None:
+                        self.tail_state.update_motion(pkt)
                 elif pkt_type == PARTICIPANTS_INFO_PACKET_TYPE:
-                    if lb_state:
-                        lb_state.update_info(pkt)
-        else:
-            for frame in receiver:
-                handle_main(frame)
-
-    except KeyboardInterrupt:
-        print("\n[WF2] Stopped.")
-        if slip_res:
-            print(f"[SLIP] Total events logged: {slip_res.event_count}")
-    finally:
-        receiver.close()
+                    if self.lb_state:
+                        self.lb_state.update_info(pkt)
+        except KeyboardInterrupt:
+            print("\n[WF2] Stopped.")
+            if self.slip_res:
+                print(f"[SLIP] Total events logged: {self.slip_res.event_count}")
+        finally:
+            self.receiver.close()
+        return True
 
 
 if __name__ == "__main__":
-    main()
+    import optparse
+    op = optparse.OptionParser()
+    op.add_option("-c", "--config", dest="config",  default=DEFAULT_CONFIG_PATH, help=f"Config YAML file (default: {DEFAULT_CONFIG_PATH})")
+    op.add_option("-g", "--gearauto", dest="gearauto", action="store_true", default=False, help="AutoShifter")
+    op.add_option("",   "--slippage", dest="slippage", action="store_true", default=False, help="Research traction loss events")
+    op.add_option("-S", "--stat", dest="stat", action="store_true", default=False, help="Show stat info every second")
+    op.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False, help="Extra debug output")
+    opt, _ = op.parse_args()
+
+    wf2hlp = WF2Helper(opt.config)
+    wf2hlp.gearauto = opt.gearauto
+    wf2hlp.show_stat = opt.stat
+    wf2hlp.slippage = opt.slippage
+    
+    wf2hlp.init()
+    wf2hlp.run()
 

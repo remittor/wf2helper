@@ -1279,6 +1279,9 @@ class TailDistOverlay:
     def set_visible(self, visible: bool) -> None:
         self.cmd_queue.put(("visible", visible))
 
+    def set_race_active(self, race_active: bool) -> None:
+        self.race_active = race_active
+
     # ------------------------------------------------------------------
     # tkinter thread
     # ------------------------------------------------------------------
@@ -1542,35 +1545,4 @@ class TailDistOverlay:
         for txt in reversed(txt_main_list):
             self.canvas.create_text( txt[0], txt[1], font = self.tk_font, **txt[2] )
 
-
-# ===========================================================================================
-
-def create_overlays(cfg: dict):
-    ovs = cfg.get("overlays", {})
-    lb_ov   = None
-    adv_ov  = None
-    car_phys_ov = None
-    tail_ov = None
-
-    lb_ov_cfg = ovs.get("leaderboard")
-    if lb_ov_cfg is not None:
-        lb_ov_cfg = get_ov_cfg(lb_ov_cfg)
-        lb_ov = LeaderboardOverlay(lb_ov_cfg)
-
-    adv_ov_cfg = ovs.get("advinfo")
-    if adv_ov_cfg is not None:
-        adv_ov_cfg = get_ov_cfg(adv_ov_cfg)
-        adv_ov = AdvInfoOverlay(adv_ov_cfg)
-
-    car_phys_cfg = ovs.get("car_phys")
-    if car_phys_cfg is not None:
-        car_phys_cfg = get_ov_cfg(car_phys_cfg)
-        car_phys_ov = CarPhysOverlay(car_phys_cfg)
-
-    tail_cfg = ovs.get("taildist")
-    if tail_cfg is not None:
-        tail_cfg = get_ov_cfg(tail_cfg)
-        tail_ov = TailDistOverlay(tail_cfg)
-
-    return lb_ov, adv_ov, tail_ov, car_phys_ov
 
