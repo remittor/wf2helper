@@ -163,6 +163,41 @@ class BaseOverlay:
         """Show/hide background window. Thread-safe via cmd_queue."""
         self.cmd_queue.put(("race_active", active))
 
+    def is_bitmap_font(self, font):
+        font_name = font if isinstance(font, str) else font.actual('family')
+        size_dict = { }
+        for fsize in [ 11, 12, 13 ]:
+            xfont = tkfont.Font(self.root, family = font_name, size = fsize)
+            xsize = xfont.metrics("linespace")
+            size_dict[xsize] = fsize
+            del xfont
+        return True if len(size_dict) == 1 else False
+    
+    def load_font(self, wnd = None):
+        if not wnd:
+            wnd = self.root
+        font_name = self.ov["font"]
+        font_size = self.ov["font_size"]
+        font = tkfont.Font(
+            root   = wnd,
+            family = font_name,
+            size   = font_size,
+            weight = "bold" if self.ov.get("bold", False) else "normal",
+        )
+        #print(f'OV: "{self.title}"  FONT: {font_name}   SIZE: {font_size}   HEIGHT: {font.metrics("linespace")}')
+        if wnd == self.root:
+            font_bitmap = self.is_bitmap_font(font_name)
+            if not font_bitmap:
+                print(f'[WARN] Font "{font_name}" is not a bitmap!')
+            elif font_size < 0 and font.metrics("linespace") != abs(font_size):
+                size_dict = { }
+                for fsize in range(8, 65):
+                    xfont = tkfont.Font(self.root, family = font_name, size = fsize)
+                    xsize = xfont.metrics("linespace")
+                    size_dict[xsize] = fsize
+                print(f'[WARN] Bitmap font "{font_name}" does not support size {abs(font_size)} (available sizes: {size_dict.keys()})')
+        return font
+
     def run(self) -> None:
         ov = self.ov
         if self.bg_alpha > 0.0:
@@ -170,6 +205,13 @@ class BaseOverlay:
             bg = tk.Tk()
             self.bg_root = bg
             bg.title(self.title + " BG")
+
+        # Text window — transparent background, text rendered on top
+        root = tk.Tk()
+        self.root = root
+        root.title(self.title)
+
+        if bg:
             bg.overrideredirect(True)
             bg.attributes("-topmost", True)
             bg.attributes("-alpha", self.bg_alpha)
@@ -178,18 +220,9 @@ class BaseOverlay:
             bg.withdraw()   # hidden until race session becomes active
             self.bg_canvas = tk.Canvas(bg, bg = self.bg_color, highlightthickness = 0, cursor = "arrow")
             self.bg_canvas.pack(fill=tk.BOTH, expand=True)
-            self.bg_font = tkfont.Font(
-                root   = bg,
-                family = ov["font"],
-                size   = ov["font_size"],
-                weight = "bold" if ov["bold"] else "normal",
-            )
+            self.bg_font = self.load_font(bg)
             self.bg_canvas.configure(width=1, height=1)
 
-        # Text window — transparent background, text rendered on top
-        root = tk.Tk()
-        self.root = root
-        root.title(self.title)
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         root.attributes("-alpha", ov["alpha"])
@@ -201,12 +234,7 @@ class BaseOverlay:
         # Use a named font registered on THIS Tk instance so Canvas in this
         # window always resolves it correctly (avoids cross-Tk font corruption
         # when two Toplevel/Tk windows live in separate threads).
-        self.font = tkfont.Font(
-            root   = root,
-            family = ov["font"],
-            size   = ov["font_size"],
-            weight = "bold" if ov["bold"] else "normal",
-        )
+        self.font = self.load_font()
         self.cw   = self.font.measure("W")
         self.lh   = self.font.metrics("linespace")
 
@@ -1297,7 +1325,7 @@ class TailDistOverlay(BaseOverlay):
         bg.configure(bg=self.chroma_key)
         if self.transparent:
             bg.attributes("-transparentcolor", self.chroma_key)
-        self.bg_font = tkfont.Font(root = bg, family = self.font_family, size = self.font_size, weight = self.font_weight)
+        self.bg_font = self.load_font(bg)
         self.bg_canvas = tk.Canvas(bg, bg = self.chroma_key, highlightthickness = 0, cursor = "arrow")
         self.bg_canvas.pack(fill=tk.BOTH, expand=True)
         # Text window — transparent bg, names at self.alpha
@@ -1310,7 +1338,7 @@ class TailDistOverlay(BaseOverlay):
         root.configure(bg=self.chroma_key)
         if self.transparent:
             root.attributes("-transparentcolor", self.chroma_key)
-        self.font = tkfont.Font(root = root, family = self.font_family, size = self.font_size, weight = self.font_weight)
+        self.font = self.load_font(root)
         self.canvas = tk.Canvas(root, bg = self.chroma_key, highlightthickness = 0, cursor = "arrow")
         self.canvas.pack(fill = tk.BOTH, expand = True)
         root.bind("<ButtonPress-1>", self.drag_start)
@@ -1512,7 +1540,6 @@ class TailDistOverlay(BaseOverlay):
         _, _, canvas_w, _ = self.game_rect
         h        = self.canvas_h
         radius_m = snap.radius_m
-        font     = self.font
 
         txt_shadow_list = [ ]
         txt_main_list = [ ]
