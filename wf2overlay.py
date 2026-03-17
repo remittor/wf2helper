@@ -506,7 +506,10 @@ class LeaderboardOverlay(BaseOverlay):
 
         rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
         for row in rows:
-            lap_str  = f"{row.lap}/{snap.lap_total}" if snap.lap_total else str(row.lap)
+            cur_lap  = row.lap
+            if row.status == PARTICIPANT_STATUS_FINISH_SUCCESS or row.status == PARTICIPANT_STATUS_FINISH_ELIMINATED:
+                cur_lap = snap.lap_total
+            lap_str  = f"{cur_lap}/{snap.lap_total}" if snap.lap_total else str(cur_lap)
             name_str = row.name[:12]    if row.name     else f"P{row.index:02d}"
             car_str  = row.car_name[:8] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
