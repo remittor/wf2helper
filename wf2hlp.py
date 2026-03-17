@@ -28,11 +28,10 @@ from pynput.keyboard import Controller, KeyCode
 
 from wf2telemetry import *
 from wf2overlay import *
+from wf2app import WF2_EXE_NAME, WF2_WND_SUBSTRING
 from win64proc import Win64Process
 
 import yaml
-
-EXE_NAME = "Wreckfest2.exe"
 
 DEFAULT_CONFIG_PATH = "wf2hlp.yaml"
 
@@ -521,7 +520,7 @@ class ActiveWindowChecker:
     """
     Checks whether Wreckfest2.exe is running AND its window is in the foreground.
     """
-    def __init__(self, keyword: str = "Wreckfest |", cache_s: float = 0.5):
+    def __init__(self, keyword: str = WF2_WND_SUBSTRING, cache_s: float = 0.5):
         self.keyword = keyword
         self.cache_s = cache_s
         self.last_check  = 0.0
@@ -539,7 +538,7 @@ class ActiveWindowChecker:
     def check(self) -> bool:
         if not self.proc.is_alive():
             self.proc.close_process()
-            if not self.proc.find_process(EXE_NAME):
+            if not self.proc.find_process(WF2_EXE_NAME):
                 return False
         return self.proc.is_foreground()
 
@@ -557,9 +556,9 @@ def is_game_running() -> bool:
     """Return True if Wreckfest2.exe process is running."""
     try:
         creationflags = 0x08000000  # CREATE_NO_WINDOW — no console flash
-        cmd = [ "tasklist", "/FI", "IMAGENAME eq "+EXE_NAME, "/NH" ]
+        cmd = [ "tasklist", "/FI", "IMAGENAME eq "+WF2_EXE_NAME, "/NH" ]
         out = subprocess.check_output(cmd, text = True, creationflags = creationflags)
-        return EXE_NAME.lower() in out.lower()
+        return WF2_EXE_NAME.lower() in out.lower()
     except Exception:
         return False
 
@@ -642,7 +641,7 @@ class WF2Helper:
         self.shifter  = AutoShifter(self.scfg)
         self.stats    = StatsPrinter(interval_s = 1.0 if self.show_stat else None)
         self.monitor  = SessionMonitor()
-        self.wnd_chk  = ActiveWindowChecker(keyword = "Wreckfest |", cache_s = 0.2)
+        self.wnd_chk  = ActiveWindowChecker(keyword = WF2_WND_SUBSTRING, cache_s = 0.2)
         self.slip_res = SlippageResearcher() if self.slippage else None
         self.init_overlays()
 
