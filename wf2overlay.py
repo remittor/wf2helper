@@ -361,6 +361,12 @@ class ParticipantRow:
         frac = (ms % 1000) // 10
         return f" {sign}{s:3d}.{frac:02d}"
 
+    @property
+    def state_str(self) -> str:
+        if self.status == PARTICIPANT_STATUS_RACING:
+            return self.delta_str
+        return self.status_str
+
 
 @dataclass
 class LeaderboardSnapshot:
@@ -458,7 +464,7 @@ class LeaderboardOverlay(BaseOverlay):
 
         track = snap.track_name[:30] if snap.track_name else "---"
         line(seg(f" {track}", "header"))
-        line(seg(f" {'P':>2}  {'Name':<12} {'Car':<8} {'Lap':>5}  {'Δ to you':>8}  {'HP':>3}  St", "header"))
+        line(seg(f"Pos  {'Name':<12} {'Car':<8} {'Lap':>5}  {'State':>8}  {'HP':>3}", "header"))
 
         rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
         for row in rows:
@@ -467,7 +473,7 @@ class LeaderboardOverlay(BaseOverlay):
             car_str  = row.car_name[:8] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
             tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
-            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f" {car_str:<8} {lap_str:>5}  {row.delta_str:>8}  {row.health:>3}  {row.status_str}", tag))
+            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f" {car_str:<8} {lap_str:>5}  {row.state_str:>8}  {row.health:>3}", tag))
 
         return lines[:self.max_rows]
 
