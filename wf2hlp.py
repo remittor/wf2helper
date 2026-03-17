@@ -649,10 +649,13 @@ class WF2Helper:
         ovs = self.cfg.get("overlays", { })
         self.ov_list = [ ]
         self.lb_ov = None
+        self.lb_state = None
         self.adv_ov = None
+        self.adv_state = None
         self.car_phys_ov = None
         self.car_phys_state = None
         self.tail_ov = None
+        self.tail_state = None
 
         lb_ov_cfg = ovs.get("leaderboard")
         if lb_ov_cfg is not None:
@@ -767,6 +770,9 @@ class WF2Helper:
         if self.gearauto:
             print(f"[WF2] Auto-gear active  {self.scfg.describe()}")
         print(f"[WF2] Ctrl+C to quit\n")
+
+        if self.adv_state:
+            res = self.adv_state.pf_worker.fetch('track01_1', rank_page = False)
     
         self.current_car = ""
         self.game_was_active = False

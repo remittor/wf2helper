@@ -728,11 +728,11 @@ class PlayFabWorker:
                 self.result = result
             self.state = "done" if result is not None else "error"
 
-    def fetch(self, track_id: str) -> dict | None:
+    def fetch(self, track_id: str, rank_page: bool = True) -> dict | None:
         pb_time = 0
         pb_rank = 0
         wr_time = 0
-        rank_page = [ ]
+        rank_page = [ ] if rank_page else None
         try:
             if not self.pf_inited:
                 if self.playfab is None:
@@ -759,7 +759,7 @@ class PlayFabWorker:
         try:
             # Fetch rank page. Single GetLeaderboard call: start=max(1, pb_rank-98), page_size=100.
             # Stored as list of (rank, score_ms), rank ascending, score_ms lower=faster.
-            if pb_rank > 0:
+            if pb_rank > 0 and isinstance(rank_page, list):
                 lb_name = self.playfab.normalize_leaderboard_name(track_id)
                 start = max(1, pb_rank - 98)
                 page, _ = self.playfab.client.get_leaderboard_page(lb_name, starting_position = start, page_size = 100)
