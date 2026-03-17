@@ -39,6 +39,7 @@ import math
 from win64proc import Win64Process
 from wf2telemetry import *
 from wf2playfab import *
+from wf2app import WF2_EXE_NAME
 
 
 OV_CFG_DEFAULTS = dict(
@@ -121,10 +122,19 @@ class BaseOverlay:
     def __init__(self, ov: dict, title: str):
         self.ov     = ov
         self.title  = title
-        self.shadow = ov.get("shadow", "#000000")
-        self.show     = bool(ov.get("show", True))
-        self.bg_alpha = float(ov.get("bg_alpha", 0.2))
-        self.bg_color = ov.get("bg_color", "#000000")
+        
+        self.show         = bool(ov.get("show", True))
+        self.bg_alpha     = float(ov.get("bg_alpha", 0.2))
+        self.bg_color     = ov.get("bg_color", "#000000")
+        self.alpha        = float(ov.get("bg_alpha", 0.8))
+        self.shadow       = ov.get("shadow", "#000000")
+        self.transparent  = bool( ov.get("transparent", True))
+        self.chroma_key   = ov.get("chroma_key", "#000005")
+        self.bg           = self.chroma_key if self.transparent else ov.get("bg", "#000000")
+        self.font_family  = ov.get("font", "Fixedsys")
+        self.font_size    = int(ov.get("font_size", 9))
+        self.font_weight  = "bold" if ov.get("bold", True) else "normal"
+        
         self.queue  = queue.Queue(maxsize=8)
         self.cmd_queue = queue.Queue()  # thread-safe window commands
         self.last   = None
@@ -136,7 +146,7 @@ class BaseOverlay:
         self.cw     = 0      # char width px
         self.lh     = 0      # line height px
         self.race_active = False
-        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread = threading.Thread(target = self.run, daemon = True)
         self.thread.start()
 
     def push(self, data) -> None:
@@ -1198,7 +1208,7 @@ class TailDistState:
             }
 
 
-class TailDistOverlay:
+class TailDistOverlay(BaseOverlay):
     """
     Graphical overlay fixed to the bottom of the game window.
 
@@ -1231,46 +1241,30 @@ class TailDistOverlay:
     POLL_INTERVAL_DEFAULT = 20
     MAX_DELTA_MS_DEFAULT  = 15000
 
-    def __init__(self, ov: dict, exe_name: str = "Wreckfest2.exe"):
-        self.ov           = ov
+    def __init__(self, ov: dict):
+        self.ov = ov
+        self.show         = bool(ov.get("show", True))
         self.fov          = float(ov.get("fov",           self.FOV_DEFAULT))
         self.canvas_h     = int(  ov.get("canvas_height", self.CANVAS_HEIGHT_DEFAULT))
         self.marker_width = float(ov.get("marker_width",  self.MARKER_WIDTH_DEFAULT))
         self.color_far    = ov.get("color_far",     self.COLOR_FAR_DEFAULT)
         self.color_near   = ov.get("color_near",    self.COLOR_NEAR_DEFAULT)
         self.outline_color= ov.get("outline_color", self.OUTLINE_COLOR_DEFAULT)
+
         self.name_color   = ov.get("fg",       self.NAME_COLOR_DEFAULT)
         self.name_shadow  = ov.get("shadow",   self.NAME_SHADOW_DEFAULT)
         self.max_rivals   = int(ov.get("max_rivals",    self.MAX_RIVALS_DEFAULT))
         self.poll_interval= int(ov.get("poll_interval", self.POLL_INTERVAL_DEFAULT))
         self.max_delta_ms = int(ov.get("max_delta_ms",  self.MAX_DELTA_MS_DEFAULT))
-        self.bg_alpha     = float(ov.get("bg_alpha", 0.5))
-        self.alpha        = float(ov.get("alpha", 1.0))
-        self.transparent  = bool( ov.get("transparent", True))
-        self.chroma_key   = ov.get("chroma_key", "#000005")
-        self.bg           = self.chroma_key if self.transparent else ov.get("bg", "#000000")
-        self.font_family  = ov.get("font", "Terminal")
-        self.font_size    = int(ov.get("font_size", 14))
-        self.font_weight  = "bold" if ov.get("bold", True) else "normal"
 
         self.game_rect    = None
         self.rect_age     = 0.0
         self.tail_state   = None   # set via attach() before use
         self.lb_state     = None   # set via attach() before use
-        self.root         = None
-        self.bg_root      = None
-        self.canvas       = None
-        self.bg_canvas = None
-        self.tk_font      = None
-        self.cmd_queue    = queue.Queue()
 
         self.proc = Win64Process()
-        self.proc.find_process(exe_name)
-        
-        self.race_active = False
-
-        self.thread = threading.Thread(target = self.run, daemon = True)
-        self.thread.start()
+        self.proc.find_process(WF2_EXE_NAME)
+        super().__init__(ov, "WF2 TailDist")
 
     # ------------------------------------------------------------------
     # Public API
@@ -1316,7 +1310,7 @@ class TailDistOverlay:
         root.configure(bg=self.chroma_key)
         if self.transparent:
             root.attributes("-transparentcolor", self.chroma_key)
-        self.tk_font = tkfont.Font(root = root, family = self.font_family, size = self.font_size, weight = self.font_weight)
+        self.font = tkfont.Font(root = root, family = self.font_family, size = self.font_size, weight = self.font_weight)
         self.canvas = tk.Canvas(root, bg = self.chroma_key, highlightthickness = 0, cursor = "arrow")
         self.canvas.pack(fill = tk.BOTH, expand = True)
         root.bind("<ButtonPress-1>", self.drag_start)
@@ -1374,7 +1368,7 @@ class TailDistOverlay:
         self.rect_age = now
         if not self.proc.is_alive():
             self.proc.close_process()
-            self.proc.find_process("Wreckfest2.exe")
+            self.proc.find_process(WF2_EXE_NAME)
         self.game_rect = self.proc.get_process_window_rect()
 
     def reposition(self) -> None:
@@ -1518,7 +1512,7 @@ class TailDistOverlay:
         _, _, canvas_w, _ = self.game_rect
         h        = self.canvas_h
         radius_m = snap.radius_m
-        font     = self.tk_font
+        font     = self.font
 
         txt_shadow_list = [ ]
         txt_main_list = [ ]
@@ -1541,7 +1535,7 @@ class TailDistOverlay:
         # Pass 2: Output text shadows on bg_root and root
         for txt in reversed(txt_shadow_list):
             self.bg_canvas.create_text( txt[0], txt[1], font = self.bg_font, **txt[2] )
-            self.canvas.create_text(    txt[0], txt[1], font = self.tk_font, **txt[2] )
+            self.canvas.create_text(    txt[0], txt[1], font = self.font, **txt[2] )
 
         # Pass 3: Output text on bg_root
         for txt in reversed(txt_main_list):
@@ -1549,6 +1543,6 @@ class TailDistOverlay:
 
         # Pass 4: Output text on root
         for txt in reversed(txt_main_list):
-            self.canvas.create_text( txt[0], txt[1], font = self.tk_font, **txt[2] )
+            self.canvas.create_text( txt[0], txt[1], font = self.font, **txt[2] )
 
 
