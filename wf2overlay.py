@@ -804,7 +804,7 @@ class PlayFabWorker:
                 self.pf_inited = self.playfab.init_auth(attach_game = True)
                 if not self.pf_inited:
                     print("[PlayFab] [ERROR] Failed to initialize auth.")
-                    return None
+                    return { "errcode": -1, "track_id": track_id }
             # Personal best
             entry = self.playfab.get_my_time(track_id)
             if entry:
@@ -819,7 +819,7 @@ class PlayFabWorker:
             print(f"[PlayFab] [ERROR] fetching {track_id}: {e}")
             if "401" in str(e) or "Unauthorized" in str(e) or "EntityTokenExpired" in str(e):
                 self.pf_inited = False
-            return None
+            return { "errcode": -1, "track_id": track_id }
         try:
             # Fetch rank page. Single GetLeaderboard call: start=max(1, pb_rank-98), page_size=100.
             # Stored as list of (rank, score_ms), rank ascending, score_ms lower=faster.
@@ -833,13 +833,14 @@ class PlayFabWorker:
         except Exception as e:
             print(f"[PlayFab] [ERROR] Rank page fetch failed: {e}")
 
-        return { "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time, "rank_page": rank_page }
+        return { "errcode": 0, "track_id": track_id, "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time, "rank_page": rank_page }
 
 
 class AdvInfoState:
     def __init__(self):
         self.pf_worker = PlayFabWorker()   # daemon thread, starts immediately
-        self.last_track_id: str = ""       # track for which PB/WR was last requested
+        self.req_track_id: str = ""        # track for which PB/WR was last requested
+        self.req_playfab_time: float = 0.0
         self.reset()
 
     def reset(self) -> None:
@@ -849,9 +850,26 @@ class AdvInfoState:
     def get_data(self):
         return deepcopy(self.data)
 
+    def run_playfab_request(self):
+        if self.data.pb_time and self.data.rank_page:
+            return  # all data from PlayFab already received
+        track_id = self.data.track_id
+        if not track_id:
+            return
+        if self.pf_worker.state != "idle" and self.pf_worker.state != "error":
+            return  # request already active
+        now = time.monotonic()
+        if now - self.req_playfab_time < 100.0:
+            return  # wait before run next request
+        self.req_playfab_time = now
+        self.pf_worker.request_pb_wr(track_id)
+
     def check_playfab_result(self) -> None:
         result = self.pf_worker.get_result()
-        if result:
+        if result and result['errcode'] != 0:
+            return
+        if result and self.data.track_id == result['track_id']:
+            self.req_track_id   = result['track_id']
             self.data.pb_time   = result["pb_time"]
             self.data.pb_rank   = result["pb_rank"]
             self.data.wr_time   = result["wr_time"]
@@ -886,8 +904,7 @@ class AdvInfoState:
             data.track_id = ses.trackId.decode("utf-8", errors="replace").strip("\x00")
             data.track_name = ses.trackName.decode("utf-8", errors="replace").strip("\x00")
             print('>>> race_inited')
-            self.last_track_id = data.track_id
-            self.pf_worker.request_pb_wr(self.last_track_id)
+            self.run_playfab_request()
 
         if not data.race_started and data.race_inited and not data.race_stopped and race_time_ms > 0:
             data.race_started = True
@@ -924,6 +941,7 @@ class AdvInfoState:
                     need_update_times = True
 
         if need_update_times:
+            self.run_playfab_request()
             if data.pkt_count_after_finish == 0:
                 data.race_time_ms = race_time_ms
                 data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
