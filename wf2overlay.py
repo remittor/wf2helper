@@ -134,6 +134,8 @@ class BaseOverlay:
         self.font_family  = ov.get("font", "Fixedsys")
         self.font_size    = int(ov.get("font_size", 9))
         self.font_weight  = "bold" if ov.get("bold", True) else "normal"
+        self.max_rows     = ov.get("max_rows", 16)
+        self.gap_rows     = ov.get("gap_rows", 1)
         
         self.queue  = queue.Queue(maxsize=8)
         self.cmd_queue = queue.Queue()  # thread-safe window commands
@@ -200,6 +202,7 @@ class BaseOverlay:
 
     def run(self) -> None:
         ov = self.ov
+        bg = None
         if self.bg_alpha > 0.0:
             # Background window — solid colour, no transparency, lower z-order
             bg = tk.Tk()
@@ -236,7 +239,7 @@ class BaseOverlay:
         # when two Toplevel/Tk windows live in separate threads).
         self.font = self.load_font()
         self.cw   = self.font.measure("W")
-        self.lh   = self.font.metrics("linespace")
+        self.lh   = self.font.metrics("linespace") + self.gap_rows
 
         self.canvas = tk.Canvas(
             root,
@@ -284,6 +287,8 @@ class BaseOverlay:
         if canvas is None:
             return
         canvas.delete("all")
+        if self.bg_root:
+            self.bg_canvas.delete("all")
 
         if not self.show:
             # Collapse to 1x1 so the window is invisible but alive
@@ -323,8 +328,6 @@ class BaseOverlay:
         w = pad * 2 + max_col * cw + dx
         h = pad * 2 + len(lines) * lh + dy
         # Keep bg_root same size and position, mirror text onto bg_canvas
-        if self.bg_root:
-            self.bg_canvas.delete("all")
         if self.bg_root and self.race_active:
             x = self.root.winfo_x()
             y = self.root.winfo_y()
@@ -490,7 +493,6 @@ class LeaderboardState:
 
 class LeaderboardOverlay(BaseOverlay):
     def __init__(self, ov: dict):
-        self.max_rows = ov.get("max_rows", 16)
         super().__init__(ov, "WF2 Leaderboard")
 
     def render(self, snap: LeaderboardSnapshot) -> list:
@@ -582,7 +584,6 @@ WF2_SURF = { 0: " --- ", 1: " AIR ", 2: " GND ", 3: " GRS ", 4: " GVL ", 5: " MU
 
 class AdvInfoOverlay(BaseOverlay):
     def __init__(self, ov: dict):
-        self.max_rows = ov.get("max_rows", 16)
         super().__init__(ov, "WF2 AdvInfo")
 
     def render(self, s_data: AdvInfoSnapshot) -> list:

@@ -8,6 +8,7 @@ overlays:
     leaderboard:
         show: true
         max_rows: 26           # max participants shown + header lines
+        gap_rows: 1            # line spacing (pixels)
         x: 20                  # screen position, pixels from left
         y: 400                 # screen position, pixels from top
         bg_alpha: 0.3          # opacity of background panel (shown during COUNTDOWN/RACING only)
@@ -25,6 +26,7 @@ overlays:
     advinfo:
         show: true
         max_rows: 20
+        gap_rows: 1
         x: 20
         y: 820
         bg_alpha: 0.3
