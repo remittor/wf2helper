@@ -139,6 +139,9 @@ class BaseOverlay:
         
         self.queue  = queue.Queue(maxsize=8)
         self.cmd_queue = queue.Queue()  # thread-safe window commands
+        self.ov_visible = False
+        self.race_active = False
+
         self.last   = None
         self.root   = None
         self.bg_root= None
@@ -147,7 +150,6 @@ class BaseOverlay:
         self.font   = None   # tkfont.Font
         self.cw     = 0      # char width px
         self.lh     = 0      # line height px
-        self.race_active = False
         self.thread = threading.Thread(target = self.run, daemon = True)
         self.thread.start()
 
@@ -255,27 +257,47 @@ class BaseOverlay:
         self.poll()
         root.mainloop()
 
-    def poll(self) -> None:
-        # Process window commands from other threads
+    def ov_show(self, with_bg = True):
+        self.root.deiconify()
+        if self.bg_root:
+            self.bg_root.deiconify() if with_bg else self.bg_root.withdraw()
+
+    def ov_hide(self):
+        self.root.withdraw()
+        if self.bg_root:
+            self.bg_root.withdraw()
+
+    def read_queues(self, process_cmd: bool = True):
+        if process_cmd:
+            # Process window commands from other threads
+            cmd_count = 0
+            try:
+                while True:
+                    cmd, arg = self.cmd_queue.get_nowait()
+                    if cmd:
+                        cmd_count += 1
+                        if cmd == "visible":
+                            self.ov_visible = arg
+                        elif cmd == "race_active":
+                            self.race_active = arg
+            except queue.Empty:
+                pass
+            if cmd_count > 0:
+                if self.ov_visible:
+                    self.ov_show(self.race_active)
+                else:
+                    self.ov_hide()
+        # data for processing in poll
+        data = None
         try:
             while True:
-                cmd, arg = self.cmd_queue.get_nowait()
-                if cmd == "visible":
-                    for win in (self.root, self.bg_root):
-                        if win:
-                            win.deiconify() if arg else win.withdraw()
-                elif cmd == "race_active":
-                    self.race_active = arg
-                    if self.bg_root:
-                        self.bg_root.deiconify() if arg else self.bg_root.withdraw()
-        except queue.Empty:
-            pass
-        # Process data
-        try:
-            while True:
-                self.last = self.queue.get_nowait()
+                data = self.queue.get_nowait()
         except (queue.Empty, queue.Full):
             pass
+        return data
+    
+    def poll(self) -> None:
+        self.last = self.read_queues()
         if self.last is not None:
             lines = self.render(self.last)
             self.draw(lines)
@@ -1312,7 +1334,7 @@ class TailDistOverlay(BaseOverlay):
         self.cmd_queue.put(("visible", visible))
 
     def set_race_active(self, race_active: bool) -> None:
-        self.race_active = race_active
+        self.cmd_queue.put(("race_active", race_active))
 
     # ------------------------------------------------------------------
     # tkinter thread
@@ -1367,15 +1389,7 @@ class TailDistOverlay(BaseOverlay):
     # ------------------------------------------------------------------
 
     def poll(self) -> None:
-        try:
-            while True:
-                cmd, arg = self.cmd_queue.get_nowait()
-                if cmd == "visible":
-                    for win in (self.root, self.bg_root):
-                        if win:
-                            win.deiconify() if arg else win.withdraw()
-        except queue.Empty:
-            pass
+        self.read_queues()
         if self.tail_state is not None and self.lb_state is not None:
             if self.tail_state.ready.is_set():
                 raw = self.tail_state.take_snapshot()
