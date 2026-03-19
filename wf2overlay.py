@@ -906,14 +906,14 @@ class AdvInfoState:
         if self.pf_worker.state != PF_WRK_IDLE:
             return  # request already active
         now = time.monotonic()
-        if now - self.req_playfab_time < 100.0:
+        if now - self.req_playfab_time < 101.0:
             return  # wait before run next request
         self.req_playfab_time = now
         if data.pb_time <= 0:
-            self.pf_worker.request_pb_wr(track_id, pb_n_wr = True, max_rank = 0)
+            self.pf_worker.request_pb_wr(track_id, pb_n_wr = True, rank_page = 0)
         else:
             max_rank = data.pb_rank if not data.rank_dict else next(iter(data.rank_dict))
-            self.pf_worker.request_pb_wr(track_id, pb_n_wr = False, max_rank = max_rank)
+            self.pf_worker.request_pb_wr(track_id, pb_n_wr = False, rank_page = max_rank)
 
     def check_playfab_result(self) -> None:
         errcode, result = self.pf_worker.get_result()
@@ -931,6 +931,28 @@ class AdvInfoState:
                 rank_dict = dict((rank, { "score_ms": score_ms }) for rank, score_ms in result['rank_page'])
                 data.rank_dict = dict(sorted( (data.rank_dict | rank_dict).items() ))
                 #print(f'>>> rank_dict updated: ', next(iter(data.rank_dict)), '...', next(reversed(data.rank_dict)))
+                data.pb_rank_new = 0  # needed update for rank
+
+    def check_and_update_pb(self):
+        data = self.data    
+        if data.lap_time_best <= 0 or data.pb_time <= 0:
+            return
+        prev_pb_time_new = data.pb_time_new
+        if data.lap_time_best < data.pb_time:
+            data.pb_time_new = data.lap_time_best
+            if data.rank_dict and data.pb_rank_new == 0:
+                dict_first_rank = next(iter(data.rank_dict))
+                dict_first_time = data.rank_dict[dict_first_rank]['score_ms']
+                if data.pb_time_new <= dict_first_time:
+                    data.pb_rank_new = 0  # unknown new rank
+                else:
+                    for rank, rank_val in data.rank_dict.items():
+                        if rank_val['score_ms'] > data.pb_time_new:
+                            data.pb_rank_new = rank
+                            break
+        if prev_pb_time_new != data.pb_time_new:
+            rank_new = str(data.pb_rank_new) if data.pb_rank_new > 0 else "???"
+            print(f'[WF2] <{data.track_id}>  NEW PB: {fmt_time(data.pb_time_new)}  RANK: {data.pb_rank} -> {rank_new}')
 
     def renew_from_main(self, pkt, traction_state: str = "") -> int:
         data = self.data
@@ -947,7 +969,9 @@ class AdvInfoState:
         g_status = hdr.statusFlags         # see enum GameStatusFlags
         p_status = pkt.playerStatusFlags   # see enum PlayerStatusFlags
 
+        self.run_playfab_request()
         self.check_playfab_result()
+        self.check_and_update_pb()
 
         race_time_ms = max(0, hdr.raceTime)
         now = time.monotonic()
@@ -961,7 +985,6 @@ class AdvInfoState:
             data.track_id = ses.trackId.decode("utf-8", errors="replace").strip("\x00")
             data.track_name = ses.trackName.decode("utf-8", errors="replace").strip("\x00")
             print('>>> race_inited')
-            self.run_playfab_request()
 
         if not data.race_started and data.race_inited and not data.race_stopped and race_time_ms > 0:
             data.race_started = True
@@ -998,7 +1021,6 @@ class AdvInfoState:
                     need_update_times = True
 
         if need_update_times:
-            self.run_playfab_request()
             if data.pkt_count_after_finish == 0:
                 data.race_time_ms = race_time_ms
                 data.race_TIME_ms = int((now - data.start_TIME_s) * 1000) + data.start_time_ms
@@ -1008,26 +1030,8 @@ class AdvInfoState:
                 pass
             
             data.lap_time_ms = tm.lapTimeCurrent
-            data.lap_time_best = tm.lapTimeBest
+            data.lap_time_best = tm.lapTimeBest if tm.lapTimeBest > 1000 else 0
             data.lap_progress = tm.lapProgress
-
-            prev_pb_time_new = data.pb_time_new
-            if data.pb_time > 1:
-                if tm.lapTimeBest < data.pb_time and tm.lapTimeBest > 0:
-                    data.pb_time_new = tm.lapTimeBest
-                if data.pb_time_new > 0 and data.pb_time_new < data.pb_time and data.rank_dict:
-                    dict_first_time = data.rank_dict[0]['score_ms']
-                    if data.pb_time_new <= dict_first_time:
-                        data.pb_rank_new = 0
-                    else:
-                        for rank, rank_val in data.rank_dict.items():
-                            if rank_val['score_ms'] > data.pb_time_new:
-                                data.pb_rank_new = rank
-                                break
-
-            if prev_pb_time_new != data.pb_time_new:
-                rank_new = str(data.pb_rank_new) if data.pb_rank_new > 0 else "???"
-                print(f'[WF2] <{data.track_id}>  NEW PB: {fmt_time(data.pb_time_new)}  RANK: {data.pb_rank} -> {rank_new}')
 
             s1 = tms.sectorTimeCurrentLap1 
             s2 = tms.sectorTimeCurrentLap2
