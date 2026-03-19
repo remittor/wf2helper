@@ -555,11 +555,11 @@ class AdvInfoSnapshot:
     track_id       : str = ""
     track_name     : str = ""
     pb_rank        : int = 0
-    pb_rank_new    : int = 0   # estimated new rank after PB, from rank_page
+    pb_rank_new    : int = 0   # estimated new rank after PB, from rank_dict
     pb_time        : int = 0
     pb_time_new    : int = 0
     wr_time        : int = 0
-    rank_page      : list = field(default_factory=list)  # (rank, score_ms) list fetched at race start
+    rank_dict      : dict = field(default_factory=dict)  # rank: { "score_ms": XXXX }  -- dict fetched at race start
 
     start_TIME_s   : float = 0.0   # real time of race_started set True
     start_time_ms  : int   = 0
@@ -896,9 +896,11 @@ class AdvInfoState:
         return deepcopy(self.data)
 
     def run_playfab_request(self):
-        if self.data.pb_time and self.data.rank_page:
+        data = self.data
+        min_rank_num = 0 if not data.rank_dict else next(iter(data.rank_dict))
+        if data.pb_time > 0 and min_rank_num == 1:
             return  # all data from PlayFab already received
-        track_id = self.data.track_id
+        track_id = data.track_id
         if not track_id:
             return
         if self.pf_worker.state != PF_WRK_IDLE:
@@ -907,18 +909,28 @@ class AdvInfoState:
         if now - self.req_playfab_time < 100.0:
             return  # wait before run next request
         self.req_playfab_time = now
-        self.pf_worker.request_pb_wr(track_id)
+        if data.pb_time <= 0:
+            self.pf_worker.request_pb_wr(track_id, pb_n_wr = True, max_rank = 0)
+        else:
+            max_rank = data.pb_rank if not data.rank_dict else next(iter(data.rank_dict))
+            self.pf_worker.request_pb_wr(track_id, pb_n_wr = False, max_rank = max_rank)
 
     def check_playfab_result(self) -> None:
         errcode, result = self.pf_worker.get_result()
         if errcode is None:
             return
-        if result and self.data.track_id == result['track_id']:
-            self.req_track_id   = result['track_id']
-            self.data.pb_time   = result["pb_time"]
-            self.data.pb_rank   = result["pb_rank"]
-            self.data.wr_time   = result["wr_time"]
-            self.data.rank_page = result.get("rank_page", [ ])
+        data = self.data
+        if result and data.track_id == result['track_id']:
+            self.req_track_id = result['track_id']
+            if data.pb_time <= 0 and 'pb_time' in result:
+                data.pb_time = result["pb_time"]
+                data.pb_rank = result["pb_rank"]
+            if data.wr_time <= 0 and 'wr_time' in result:
+                data.wr_time = result["wr_time"]
+            if 'rank_page' in result and result['rank_page']:
+                rank_dict = dict((rank, { "score_ms": score_ms }) for rank, score_ms in result['rank_page'])
+                data.rank_dict = dict(sorted( (data.rank_dict | rank_dict).items() ))
+                #print(f'>>> rank_dict updated: ', next(iter(data.rank_dict)), '...', next(reversed(data.rank_dict)))
 
     def renew_from_main(self, pkt, traction_state: str = "") -> int:
         data = self.data
@@ -1003,13 +1015,13 @@ class AdvInfoState:
             if data.pb_time > 1:
                 if tm.lapTimeBest < data.pb_time and tm.lapTimeBest > 0:
                     data.pb_time_new = tm.lapTimeBest
-                if data.pb_time_new > 0 and data.pb_time_new < data.pb_time and data.rank_page:
-                    page_first_time = data.rank_page[0][1]  # [ ( rank, score_ms ) ]
-                    if data.pb_time_new <= page_first_time:
+                if data.pb_time_new > 0 and data.pb_time_new < data.pb_time and data.rank_dict:
+                    dict_first_time = data.rank_dict[0]['score_ms']
+                    if data.pb_time_new <= dict_first_time:
                         data.pb_rank_new = 0
                     else:
-                        for rank, score_ms in data.rank_page:
-                            if score_ms > data.pb_time_new:
+                        for rank, rank_val in data.rank_dict.items():
+                            if rank_val['score_ms'] > data.pb_time_new:
                                 data.pb_rank_new = rank
                                 break
 
