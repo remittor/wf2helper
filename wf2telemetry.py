@@ -9,6 +9,10 @@ No struct.unpack_from needed — fields are accessed directly as attributes.
 import sys
 import time
 import socket
+import threading
+import queue
+import struct
+
 from ctypes import Structure
 from ctypes import (c_char, c_float, c_uint8, c_uint16, c_uint32, c_int16, c_int32)
 from ctypes import sizeof
@@ -393,10 +397,22 @@ class WF2TelemetryReceiver:
         self.sock.bind((host, port))
         self.sock.settimeout(0.2)
         print(f"[WF2] Listening on UDP {host}:{port}  (PacketMain = {self.PKT_MAIN_SIZE} bytes)")
-        self.pkt_main_stat = WF2PktStat() 
+        self.pkt_main_stat = WF2PktStat()
+        self.pkt_queue = None
+        self.thread = None
+        self.sock_out = None
+
+    def create_retrasmitter(self, port: int, ip_addr: str | None = None):
+        self.pkt_queue = queue.Queue(maxsize = 100)
+        if not ip_addr:
+            ip_addr = "127.0.0.1"
+        self.thread = threading.Thread(target = self.retrasmitter, args = (ip_addr, port), daemon = True)
+        self.thread.start()
 
     def close(self):
         self.sock.close()
+        if self.thread:
+            self.sock_out.close()
 
     PKT_LEADERBOARD_SIZE     = sizeof(PacketParticipantsLeaderboard)
     PKT_TIMING_SIZE          = sizeof(PacketParticipantsTiming)
@@ -459,13 +475,41 @@ class WF2TelemetryReceiver:
             return None
         return PacketParticipantsInfo.from_buffer_copy(data[:self.PKT_INFO_SIZE])
 
+    def retrasmitter(self, ip_addr: str, port: int):
+        self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.sock_out.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        self.sock_out.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+        #SIO_UDP_CONNRESET = 0x9800000C
+        #self.sock_out.ioctl(SIO_UDP_CONNRESET, struct.pack("I", 0))
+        print(f'[WF2] UDP-packet retrasmitter are running! [{ip_addr}:{port}]')
+        while True:
+            data = self.pkt_queue.get()
+            try:
+                self.sock_out.sendto(data, (ip_addr, port))
+            except ConnectionResetError as e:
+                pass
+            except OSError as e:
+                if e.winerror == 10038:
+                    print("[WARN] Socket already closed. Stop retrasmitter thread!")
+                    return
+                pass
+
+    def recv_pkt(self):
+        data, _ = self.sock.recvfrom(65535)
+        if data and len(data) > 32 and self.pkt_queue:
+            try:
+                self.pkt_queue.put_nowait(data)
+            except queue.Full:
+                pass
+        return data
+
     def recv_any(self):
         """
         Receive one UDP packet and return parsed result as
         (packet_type, packet_object) or (None, None) on timeout/unknown.
         """
         try:
-            data, _ = self.sock.recvfrom(65535)
+            data = self.recv_pkt()
         except socket.timeout:
             return None, None
         if not data.startswith(SIGNATURE):
@@ -494,7 +538,7 @@ class WF2TelemetryReceiver:
     def __next__(self) -> PacketMain:
         while True:
             try:
-                data, _ = self.sock.recvfrom(65535)
+                data = self.recv_pkt()
             except socket.timeout:
                 continue
             frame = self.parse_main(data)

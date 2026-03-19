@@ -1,5 +1,9 @@
 udp_port: 23123
 
+retrasmitter:
+    dst_host: "127.0.0.1"
+    udp_port: 23124
+
 keys:
     up_shift: a
     down_shift: z

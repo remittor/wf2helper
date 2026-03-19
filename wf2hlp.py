@@ -771,6 +771,10 @@ class WF2Helper:
             print(f"[WF2] Auto-gear active  {self.scfg.describe()}")
         print(f"[WF2] Ctrl+C to quit\n")
 
+        retr = self.cfg.get("retrasmitter", None)
+        if retr and retr.get('udp_port', 0):
+            self.receiver.create_retrasmitter(retr['udp_port'], retr['dst_host'])
+
         if self.adv_state:
             res = self.adv_state.pf_worker.fetch('track01_1', rank_page = False)
     
