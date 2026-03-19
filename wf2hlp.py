@@ -776,7 +776,9 @@ class WF2Helper:
             self.receiver.create_retrasmitter(retr['udp_port'], retr['dst_host'])
 
         if self.adv_state:
-            res = self.adv_state.pf_worker.fetch('track01_1', rank_page = False)
+            pf_worker = PlayFabWorker(daemon = False)
+            res = pf_worker.fetch('track01_1', rank_page = -1)
+            del pf_worker
     
         self.current_car = ""
         self.game_was_active = False

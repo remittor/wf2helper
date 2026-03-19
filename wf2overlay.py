@@ -735,68 +735,76 @@ class AdvInfoOverlay(BaseOverlay):
         return lines[:self.max_rows]
 
 
+# states for PlayFabWorker 
+PF_WRK_IDLE    = 1
+PF_WRK_PENDING = 2
+PF_WRK_RUNNING = 3
+PF_WRK_DONE    = 4
+
 class PlayFabWorker:
     """
     Executes requests to PlayFab in a separate daemon thread.
     The main thread calls request_pb_wr(track_id) and immediately returns.
     The result is available via get_result(), which returns a dict or None.
     States:
-        idle — doing nothing
+        idle    — doing nothing
         pending — the task has been assigned, waiting for execution
         running — the request is currently being processed
-        done — the result is ready, retrieve it via get_result()
-        error — an error occurred (result is None)
+        done    — the result is ready, retrieve it via get_result()
     """
-    def __init__(self):
-        self.task_queue  : queue.Queue = queue.Queue(maxsize = 1)
+    def __init__(self, daemon: bool = True):
         self.result      : dict | None = None
         self.result_lock : threading.Lock = threading.Lock()
-        self.state       : str = "idle"   # idle / pending / running / done / error
+        self.state       : int = PF_WRK_IDLE
+        self.errcode     : int = 0
         self.playfab     : WF2PlayFab | None = None
         self.pf_inited   : bool = False
-        self.thread = threading.Thread(target = self.worker, daemon = True, name = "PlayFabWorker")
-        self.thread.start()
+        if daemon:
+            self.task_queue  : queue.Queue = queue.Queue(maxsize = 1)
+            self.thread = threading.Thread(target = self.worker, daemon = True, name = "PlayFabWorker")
+            self.thread.start()
 
-    def request_pb_wr(self, track_id: str) -> None:
+    def request_pb_wr(self, track_id: str, pb_n_wr: bool = True, rank_page: int = 0) -> None:
         with self.result_lock:
             self.result = None
-        self.state = "pending"
+        self.state = PF_WRK_PENDING
         while not self.task_queue.empty():
             try:
                 self.task_queue.get_nowait()
             except queue.Empty:
                 break
         try:
-            self.task_queue.put_nowait(track_id)
+            self.task_queue.put_nowait( (track_id, pb_n_wr, rank_page) )
         except queue.Full:
             pass
 
     def get_result(self) -> dict | None:
-        if self.state != "done":
-            return None
+        if self.state != PF_WRK_DONE:
+            return None, None
         with self.result_lock:
             result = self.result
             self.result = None
-        self.state = "idle"
-        return result
+            errcode = self.errcode
+            self.errcode = 0
+        self.state = PF_WRK_IDLE
+        return errcode, result
 
     def worker(self) -> None:
         while True:
             try:
-                track_id = self.task_queue.get(timeout = 1.0)
+                track_id, pb_n_wr, rank_page = self.task_queue.get(timeout = 1.0)
             except queue.Empty:
                 continue
-            self.state = "running"
-            result = self.fetch(track_id)
+            self.state = PF_WRK_RUNNING
+            result = self.fetch(track_id, pb_n_wr, rank_page)
             with self.result_lock:
                 self.result = result
-            self.state = "done" if result is not None else "error"
+            self.state = PF_WRK_DONE
 
-    def fetch(self, track_id: str, rank_page: bool = True) -> dict | None:
-        pb_time = 0
-        pb_rank = 0
-        wr_time = 0
-        rank_page = [ ] if rank_page else None
+    def fetch(self, track_id: str, pb_n_wr: bool = True, rank_page: int = 0) -> dict | None:
+        res = { "track_id": track_id }
+        if rank_page >= 0:
+            res.update( { 'rank_page': [ ] } )
         try:
             if not self.pf_inited:
                 if self.playfab is None:
@@ -804,7 +812,38 @@ class PlayFabWorker:
                 self.pf_inited = self.playfab.init_auth(attach_game = True)
                 if not self.pf_inited:
                     print("[PlayFab] [ERROR] Failed to initialize auth.")
-                    return { "errcode": -1, "track_id": track_id }
+                    self.errcode = -1
+                    return res
+        except Exception as e:
+            print(f"[PlayFab] [ERROR] Fetching <{track_id}>: {e}")
+            if "401" in str(e) or "Unauthorized" in str(e) or "EntityTokenExpired" in str(e):
+                self.pf_inited = False
+            self.errcode = -1
+            return res
+        if pb_n_wr:
+            data = self.fetch_pb_n_wr(track_id)
+            if not data:
+                return res
+            self.errcode = 0
+            res.update(data)
+        if rank_page >= 0:
+            if rank_page == 0:
+                if 'pb_rank' not in res or not res['pb_rank']:
+                    return res
+                max_rank = res['pb_rank']
+            else:
+                max_rank = rank_page
+            data = self.fetch_rank_page(track_id, max_rank)
+            if not data:
+                self.errcode = 0 if pb_n_wr else -1 
+                return res
+            self.errcode = 0
+            res.update(data)
+        return res
+
+    def fetch_pb_n_wr(self, track_id: str) -> dict | None:
+        pb_time, pb_rank, wr_time = 0, 0, 0
+        try:
             # Personal best
             entry = self.playfab.get_my_time(track_id)
             if entry:
@@ -814,26 +853,32 @@ class PlayFabWorker:
             entry_list = self.playfab.get_top(track_id, max_results = 1)
             if entry_list and entry_list[0]:
                 wr_time = int(entry_list[0].get("Scores", [0])[0])
-            print(f"[PlayFab] {track_id}  WR: {fmt_time(wr_time)}  PB: {fmt_time(pb_time)}  Rank: {pb_rank}")
+            print(f"[PlayFab] <{track_id}>  WR: {fmt_time(wr_time)}  PB: {fmt_time(pb_time)}  Rank: {pb_rank}")
         except Exception as e:
-            print(f"[PlayFab] [ERROR] fetching {track_id}: {e}")
+            print(f"[PlayFab] [ERROR] fetching <{track_id}>: {e}")
             if "401" in str(e) or "Unauthorized" in str(e) or "EntityTokenExpired" in str(e):
                 self.pf_inited = False
-            return { "errcode": -1, "track_id": track_id }
+            self.errcode = -1
+            return None
+        return { "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time }
+            
+    def fetch_rank_page(self, track_id: str, max_rank: int) -> dict | None:
+        rank_page = [ ]
         try:
             # Fetch rank page. Single GetLeaderboard call: start=max(1, pb_rank-98), page_size=100.
             # Stored as list of (rank, score_ms), rank ascending, score_ms lower=faster.
-            if pb_rank > 0 and isinstance(rank_page, list):
+            if max_rank > 0:
                 lb_name = self.playfab.normalize_leaderboard_name(track_id)
-                start = max(1, pb_rank - 98)
+                start = max(1, max_rank - 95)
                 page, _ = self.playfab.client.get_leaderboard_page(lb_name, starting_position = start, page_size = 100)
                 rank_page = [ (entry.get("Rank", 0), int(entry.get("Scores", [0])[0])) for entry in page ]
                 time_range = fmt_time(rank_page[0][1]) + ' ... ' + fmt_time(rank_page[-1][1]) if rank_page else ""
-                print(f"[PlayFab] Rank page: loaded {len(rank_page)} entries from rank {start}  [{time_range}]")
+                print(f"[PlayFab] Rank page: loaded {len(rank_page)} entries from rank {start} to {start+99}  [{time_range}]")
         except Exception as e:
-            print(f"[PlayFab] [ERROR] Rank page fetch failed: {e}")
-
-        return { "errcode": 0, "track_id": track_id, "pb_time": pb_time, "pb_rank": pb_rank, "wr_time": wr_time, "rank_page": rank_page }
+            print(f"[PlayFab] [ERROR] Rank page for <{track_id}> fetch failed: {e}")
+            self.errcode = -1
+            return None
+        return { "rank_page": rank_page }
 
 
 class AdvInfoState:
@@ -856,7 +901,7 @@ class AdvInfoState:
         track_id = self.data.track_id
         if not track_id:
             return
-        if self.pf_worker.state != "idle" and self.pf_worker.state != "error":
+        if self.pf_worker.state != PF_WRK_IDLE:
             return  # request already active
         now = time.monotonic()
         if now - self.req_playfab_time < 100.0:
@@ -865,8 +910,8 @@ class AdvInfoState:
         self.pf_worker.request_pb_wr(track_id)
 
     def check_playfab_result(self) -> None:
-        result = self.pf_worker.get_result()
-        if result and result['errcode'] != 0:
+        errcode, result = self.pf_worker.get_result()
+        if errcode is None:
             return
         if result and self.data.track_id == result['track_id']:
             self.req_track_id   = result['track_id']
@@ -970,7 +1015,7 @@ class AdvInfoState:
 
             if prev_pb_time_new != data.pb_time_new:
                 rank_new = str(data.pb_rank_new) if data.pb_rank_new > 0 else "???"
-                print(f'[WF2] NEW PB: {fmt_time(data.pb_time_new)}  RANK: {data.pb_rank} -> {rank_new}')
+                print(f'[WF2] <{data.track_id}>  NEW PB: {fmt_time(data.pb_time_new)}  RANK: {data.pb_rank} -> {rank_new}')
 
             s1 = tms.sectorTimeCurrentLap1 
             s2 = tms.sectorTimeCurrentLap2
