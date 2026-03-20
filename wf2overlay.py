@@ -890,6 +890,8 @@ class AdvInfoState:
 
     def reset(self) -> None:
         self.data = AdvInfoSnapshot()
+        self.req_track_id = ""
+        self.req_playfab_time = 0.0
         return self.data
 
     def get_data(self):
