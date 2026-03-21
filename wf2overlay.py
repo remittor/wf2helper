@@ -27,11 +27,13 @@ Appearance keys (same for both sections):
     shadow, transparent, chroma_key
 """
 
+import os
 import tkinter as tk
 import tkinter.font as tkfont
 import threading
 import queue
 import time
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from copy import deepcopy
 import math
@@ -554,6 +556,7 @@ class AdvInfoSnapshot:
     
     track_id       : str = ""
     track_name     : str = ""
+    car_name       : str = ""
     pb_rank        : int = 0
     pb_rank_new    : int = 0   # estimated new rank after PB, from rank_dict
     pb_time        : int = 0
@@ -887,6 +890,7 @@ class AdvInfoState:
         self.req_track_id: str = ""        # track for which PB/WR was last requested
         self.req_playfab_time: float = 0.0
         self.reset()
+        self.curdir = os.path.dirname(os.path.abspath(__file__))
 
     def reset(self) -> None:
         self.data = AdvInfoSnapshot()
@@ -953,8 +957,23 @@ class AdvInfoState:
                             data.pb_rank_new = rank
                             break
         if prev_pb_time_new != data.pb_time_new:
+            now_local = datetime.now().astimezone()
+            offset_seconds = now_local.utcoffset().total_seconds()
+            offset_hours = int(offset_seconds / 3600)
+            curtime = now_local.strftime('%Y-%m-%d %H:%M:%S') + f"{offset_hours:+03d}"
             rank_new = str(data.pb_rank_new) if data.pb_rank_new > 0 else "???"
-            print(f'[WF2] <{data.track_id}>  NEW PB: {fmt_time(data.pb_time_new)}  RANK: {data.pb_rank} -> {rank_new}')
+            fn = self.curdir + '/my_pb.txt'
+            prev_time = fmt_time(data.pb_time)
+            prev_rank = f'({data.pb_rank})'
+            new_time = fmt_time(data.pb_time_new)
+            new_rank  = f'({rank_new})'
+            line = f'{curtime}  {data.track_id:<14}  PREV_TIME: {prev_time} {prev_rank:<6}  NEW_TIME: {new_time} {new_rank:<6}  CAR: {data.car_name}'
+            print(f'[WF2] <{data.track_id}>  NEW PB: {new_time}  RANK: {data.pb_rank} -> {rank_new}')
+            try:
+                with open(fn, 'a', encoding = 'utf-8') as file:
+                    file.write(line + '\n')
+            except Exception:
+                pass
 
     def renew_from_main(self, pkt, traction_state: str = "") -> int:
         data = self.data
@@ -964,6 +983,7 @@ class AdvInfoState:
         lb   = pkt.participantPlayerLeaderboard
         tm   = pkt.participantPlayerTiming
         tms  = pkt.participantPlayerTimingSectors
+        inf  = pkt.participantPlayerInfo
         ses  = pkt.session
         tires = pkt.carPlayer.tires
         
@@ -986,6 +1006,7 @@ class AdvInfoState:
             data.sector_fract = (ses.sectorFract1, ses.sectorFract2, 1.0)
             data.track_id = ses.trackId.decode("utf-8", errors="replace").strip("\x00")
             data.track_name = ses.trackName.decode("utf-8", errors="replace").strip("\x00")
+            data.car_name = inf.carName.decode("utf-8", errors="replace").strip("\x00")
             print('>>> race_inited')
 
         if not data.race_started and data.race_inited and not data.race_stopped and race_time_ms > 0:
