@@ -518,6 +518,7 @@ class LeaderboardState:
 class LeaderboardOverlay(BaseOverlay):
     def __init__(self, ov: dict):
         super().__init__(ov, "WF2 Leaderboard")
+        self.show_slot_num = ov.get('show_slot_num', False)
 
     def render(self, snap: LeaderboardSnapshot) -> list:
         seg = self.gen_segment
@@ -528,7 +529,8 @@ class LeaderboardOverlay(BaseOverlay):
 
         track = snap.track_name[:30] if snap.track_name else "---"
         line(seg(f" {track}", "header"))
-        line(seg(f"Pos  {'Name':<12} {'Car':<8} {'Lap':>5}  {'State':>8}  {'HP':>3}", "header"))
+        slot_num = '  #' if self.show_slot_num else ''
+        line(seg(f"Pos  {'Name':<12} {'Car':<8} {'Lap':>5}  {'State':>8}  {'HP':>3}{slot_num}", "header"))
 
         rows = sorted(snap.rows, key=lambda r: r.position if r.position > 0 else 999)
         for row in rows:
@@ -540,7 +542,8 @@ class LeaderboardOverlay(BaseOverlay):
             car_str  = row.car_name[:8] if row.car_name else ""
             pos_str  = f"{row.position:>2}" if row.position else " ?"
             tag      = "player" if row.is_player else ("dnf" if row.status_str else "")
-            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f" {car_str:<8} {lap_str:>5}  {row.state_str:>8}  {row.health:>3}", tag))
+            slot_num = seg(f'{str(row.index):>3}', tag) if self.show_slot_num and row.index < 100 else None
+            line(seg(f" {pos_str}  {name_str:<12}", tag), seg(f" {car_str:<8} {lap_str:>5}  {row.state_str:>8}  {row.health:>3}", tag), slot_num)
 
         return lines[:self.max_rows]
 

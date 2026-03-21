@@ -13,6 +13,7 @@ keys:
 overlays:
     leaderboard:
         show: true
+        show_slot_num: false
         max_rows: 26           # max participants shown + header lines
         gap_rows: 1            # line spacing (pixels)
         x: 20                  # screen position, pixels from left
