@@ -513,11 +513,10 @@ def save_leaderboard_json(entries: list[dict], path: str):
     Each entry occupies exactly one line. Rank keys are right-aligned to 5 digits.
     Time field is right-aligned to 12 chars to accommodate "h:mm:ss.mmm" format.
     Entity ID and display name are included on the same line.
-
     Example output:
     {
-        1: { "pid": "9E9E103296EC989E", "time":   "00:33.306", "name": "DavidFinalForm" },
-        2: { "pid": "87C3D31A778C08AF", "time":   "00:33.307", "name": "DnB" },
+        1: { "pid": "9E9E103296EC9811", "time":   "00:33.306", "name": "DavidFinalForm" },
+        2: { "pid": "87C3D31A778C0811", "time":   "00:33.307", "name": "DnB" },
     ...
     99999: { "pid": "AAABBBCCC1112223", "time": "1:02:31.968", "name": "slowpoke" }
     }
@@ -529,17 +528,15 @@ def save_leaderboard_json(entries: list[dict], path: str):
     # Time width: "h:mm:ss.mmm" = 11 chars, "mm:ss.mmm" = 9 chars -> pad to 11
     time_w = 11
 
-    lines = ["{"]
+    lines = [ ]
     for i, e in enumerate(entries):
         rank  = e.get("Rank", i + 1)
         score = '"' + fmt_ms(e.get("Scores", [0])[0]) + '"'
         name  = (e.get("DisplayName") or "").replace('"', '\"')
         eid   = '"' + e.get("Entity", { }).get("Id", "") + '"'
-        is_last = (i == len(entries) - 1)
-        comma   = "" if is_last else ","
-        lines.append(f'  {rank:{rank_w}}: {{ "pid": {eid:>18}, "time": {score:>13}, "name": "{name}" }}{comma}')
-    lines.append("}")
-    text = "\n".join(lines)
+        lines.append(f'  {rank:{rank_w}}: {{ "pid": {eid:>18}, "time": {score:>13}, "name": "{name}" }}')
+        pass
+    text = '{\n' + ',\n'.join(lines) + '\n}'
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     print(f"[OK] Saved {len(entries)} entries to {path}")
@@ -562,33 +559,41 @@ def print_entries(entries: list[dict]):
 
 def cmd_probe(args, wf2: WF2PlayFab):
     """Probe PlayFab to discover all existing track leaderboards."""
-    confirmed = wf2.probe_all_tracks(max_track_num=args.max_track)
-    print(f"\nConfirmed tracks ({len(confirmed)}):")
-    for t in confirmed:
-        print(f"  {t}")
+    confirmed = wf2.probe_all_tracks(max_track_num = args.num)
+    print('\n')
+    print(f'Confirmed tracks ({len(confirmed)}):')
+    for track in confirmed:
+        print(f"  {track}")
 
 
-def cmd_my_times(args, wf2: WF2PlayFab):
-    """Fetch player's best lap on all known tracks."""
-    results = wf2.get_my_times_all_tracks(output_file=args.output)
-    print(f"\nTotal tracks with entries: {len(results)}")
-
-
-def cmd_my_time(args, wf2: WF2PlayFab):
+def cmd_my_pb(args, wf2: WF2PlayFab):
     """Fetch player's entry on a specific leaderboard."""
-    entry = wf2.get_my_time(args.name, output_file=args.output)
+    if not args.track:
+        print("[ERROR] track argument not specified!")
+        sys.exit(1)
+    if args.track == 'all':
+        results = wf2.get_my_times_all_tracks(output_file=args.output)
+        print('\n')
+        print(f'Total tracks with entries: {len(results)}')
+        return
+    entry = wf2.get_my_time(args.track, output_file = args.output)
     if entry:
-        print(f"\nLeaderboard: {args.name}")
+        print('\n')
+        print(f'Leaderboard for track: {args.track}')
         print_entries([entry])
     else:
-        print(f"[INFO] No entry found for leaderboard: {args.name}")
+        print(f"[INFO] No entry found for leaderboard: {args.track}")
 
 
 def cmd_top(args, wf2: WF2PlayFab):
     """Fetch top N entries from a leaderboard (auto-paginates above 100)."""
-    entries = wf2.get_top(args.name, max_results=args.top, output_file=args.output)
-    pages   = (len(entries) + 99) // 100
-    print(f"\nLeaderboard: {args.name}  ({len(entries)} entries, {pages} page(s))")
+    if not args.track:
+        print("[ERROR] track argument not specified!")
+        sys.exit(1)
+    entries = wf2.get_top(args.track, max_results = args.num, output_file = args.output)
+    pages = (len(entries) + 99) // 100
+    print('\n')
+    print(f'Leaderboard: {args.track}  ({len(entries)} entries, {pages} page(s))')
     print_entries(entries)
 
 
@@ -599,45 +604,42 @@ def cmd_top(args, wf2: WF2PlayFab):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Wreckfest 2 PlayFab leaderboard client")
-    parser.add_argument("--cache-dir", "-C", default = None, help = "Directory containing wf2mem.json (default: script directory)")
-    parser.add_argument("--output", "-o", default = None, help = "Save results to JSON file")
-    parser.add_argument("--no-attach", "-@", action = "store_true", help = "Do not attach to game process (use cached token only)")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest = "command", required = True)
+    
+    def add_common_args(parser):
+        parser.add_argument("--track", "-t", default = '', help = "Race track ID")
+        parser.add_argument("--cache-dir", "-C", default = None, help = "Directory containing wf2mem.json (default: script directory)")
+        parser.add_argument("--output", "-o", default = None, help = "Save results to JSON file")
+        parser.add_argument("--no-attach", "-@", action = "store_true", help = "Do not attach to game process (use cached token only)")
 
     # probe
     p_probe = sub.add_parser("probe", help = "Probe PlayFab to discover all existing track leaderboards")
-    p_probe.add_argument("--max-track", "-m", type = int, default = 15, help = "Max track number to probe (default: 15)")
-    p_probe.set_defaults(func=cmd_probe)
+    p_probe.add_argument("--num", "-n", type = int, default = 15, help = "Max track number to probe (default: 15)")
+    p_probe.set_defaults(func = cmd_probe)
+    add_common_args(p_probe)
 
-    # my-times
-    p_mt = sub.add_parser("my-times", help="Fetch your best lap on all tracks")
-    p_mt.set_defaults(func=cmd_my_times)
-
-    # my-time
-    p_mto = sub.add_parser("my-time", help="Fetch your entry on a specific leaderboard")
-    p_mto.add_argument("name", help="Leaderboard name")
-    p_mto.set_defaults(func=cmd_my_time)
+    # my-pb
+    p_mypb = sub.add_parser("pb", help="Fetch your entry on a specific leaderboard")
+    p_mypb.set_defaults(func = cmd_my_pb)
+    add_common_args(p_mypb)
 
     # top
     p_top = sub.add_parser("top", help="Fetch top N entries from a leaderboard")
-    p_top.add_argument("name", help="Leaderboard name")
-    p_top.add_argument("--top", "-n", type = int, default = 100, help = "Number of entries (default: 100)")
-    p_top.set_defaults(func=cmd_top)
+    p_top.add_argument("--num", "-n", type = int, default = 100, help = "Number of entries (default: 100)")
+    p_top.set_defaults(func = cmd_top)
+    add_common_args(p_top)
 
     args = parser.parse_args()
 
     cache_dir = args.cache_dir or os.path.dirname(os.path.abspath(__file__))
     wf2 = WF2PlayFab(cache_dir = cache_dir)
-
     try:
         print("Initializing PlayFab auth...")
         ok = wf2.init_auth(attach_game = not args.no_attach)
         if not ok:
             print("[ERROR] Failed to initialize auth.")
             sys.exit(1)
-
         args.func(args, wf2)
-
     except RuntimeError as e:
         print(f"[ERROR] {e}")
         sys.exit(1)
