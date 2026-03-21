@@ -562,7 +562,7 @@ def is_game_running() -> bool:
     except Exception:
         return False
 
-def check_and_patch_telemetry_config(udp_port: int) -> bool:
+def check_and_patch_telemetry_config(udp_port: int, patch_game_config: bool = True) -> bool:
     """
     Find game telemetry config.json, check that UDP is enabled and port matches.
     If not — prompt user to patch. Returns True if everything is OK to proceed.
@@ -601,6 +601,8 @@ def check_and_patch_telemetry_config(udp_port: int) -> bool:
         for field, cur, want in issues:
             print(f"      {field}: current={cur!r}  expected={want!r}")
             pass
+        if not patch_game_config:
+            return ok
         answer = input("[CFG] Patch this file automatically? [Y/n]: ").strip().lower()
         if answer in ("", "y", "yes"):
             for field, _, want in issues:
@@ -623,7 +625,7 @@ def check_and_patch_telemetry_config(udp_port: int) -> bool:
                 )
                 ok = False
         else:
-            print("[CFG] Skipped. Telemetry may not work correctly.")
+            print("[CFG] Patching skipped. Telemetry may not work correctly.")
             ok = False
     return ok
 
@@ -761,10 +763,13 @@ class WF2Helper:
                 f"      rpm rise threshold   : {SlippageResearcher.RPM_RISE_THRESHOLD} rpm/s\n"
                 f"      print cooldown       : {SlippageResearcher.PRINT_COOLDOWN_S}s\n"
             )
+        self.check_game_config = self.cfg.get("check_game_config", True)
+        self.patch_game_config = self.cfg.get("patch_game_config", True)
         self.udp_port = self.cfg.get("udp_port", 23123)
-        if not check_and_patch_telemetry_config(self.udp_port):
-            print("[WF2] Fix telemetry config and restart. Exiting.")
-            return False
+        if self.check_game_config:
+            if not check_and_patch_telemetry_config(self.udp_port, self.patch_game_config):
+                print("[WF2] Fix telemetry config and restart. Exiting.")
+                return False
 
         self.receiver = WF2TelemetryReceiver(port = self.udp_port)
         if self.gearauto:

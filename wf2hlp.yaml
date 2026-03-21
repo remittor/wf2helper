@@ -1,3 +1,5 @@
+check_game_config: true
+patch_game_config: true
 udp_port: 23123
 
 retrasmitter:
