@@ -8,30 +8,24 @@ import urllib.error
 from wf2app import WF2App, decode_pf_entity_token, is_base64_str
 
 
-# ----------------------------------------------------------------------
-# Known WF2 track leaderboard names
-# Discovered from game memory. Pattern: ce-track{NN}_{variant}-class_all
-# ----------------------------------------------------------------------
-
-WF2_KNOWN_TRACKS = [
-    "ce-track01_1-class_all",
-    "ce-track02_1-class_all",
-    "ce-track02_2-class_all",
-    "ce-track02_2_rev-class_all",
-    "ce-track03_1-class_all",
-    "ce-track03_1_rev-class_all",
-    "ce-track04_1-class_all",
-    "ce-track04_1_rev-class_all",
-    "ce-track05_1-class_all",
-    "ce-track05_1_rev-class_all",
-    "ce-track06_1-class_all",
-    "ce-track06_1_rev-class_all",
-    "ce-track07_1-class_all",
-    "ce-track07_1_rev-class_all",
-]
-
 # Cache file for discovered track names
 WF2_TRACKS_CACHE_FILE = "wf2tracks.json"
+
+def get_lb_name_by_track_id(track_id: str) -> str:
+    """
+    Normalize a leaderboard name to full form.
+    If track_id does not start with "ce-", prepend it.
+    If track_id does not end with "-class_all", append it.
+    Examples:
+      "track01_1"              -> "ce-track01_1-class_all"
+      "ce-track01_1"           -> "ce-track01_1-class_all"
+      "ce-track01_1-class_all" -> "ce-track01_1-class_all"
+    """
+    if not track_id.startswith("ce-"):
+        track_id = "ce-" + track_id
+    if not track_id.endswith("-class_all"):
+        track_id = track_id + "-class_all"
+    return track_id
 
 
 # ----------------------------------------------------------------------
@@ -314,7 +308,8 @@ class WF2PlayFab:
 
         self.client.set_entity_token(token, entity_id)
         try:
-            self.client.get_leaderboard_around_entity(WF2_KNOWN_TRACKS[0], entity_id = entity_id, surrounding = 0)
+            test_lb_name = 'ce-track01_1-class_all'
+            self.client.get_leaderboard_around_entity(test_lb_name, entity_id = entity_id, surrounding = 0)
             return True
         except RuntimeError as e:
             err = str(e)
@@ -340,27 +335,28 @@ class WF2PlayFab:
     # Track list management
     # ------------------------------------------------------------------
 
-    def load_track_names(self) -> list[str]:
+    def load_tracks_info(self) -> list[str]:
         """
-        Load track leaderboard names from wf2tracks.json cache.
-        Falls back to WF2_KNOWN_TRACKS if cache does not exist.
+        Load track names from wf2tracks.json
         """
         if os.path.isfile(self.tracks_cache_path):
             try:
                 with open(self.tracks_cache_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                tracks = data.get("tracks", [ ])
+                tracks = data.get("tracks", { })
                 if tracks:
                     return tracks
             except Exception:
                 pass
-        return list(WF2_KNOWN_TRACKS)
+        print(f'[ERROR] Cannot load file "{WF2_TRACKS_CACHE_FILE}"')
+        sys.exit(1)
 
     def save_track_names(self, tracks: list[str]):
         """Persist track names to wf2tracks.json."""
-        with open(self.tracks_cache_path, "w", encoding="utf-8") as f:
+        fn = os.path.join(self.cache_dir, 'wf2_track_list.json')
+        with open(fn, "w", encoding="utf-8") as f:
             json.dump({"tracks": sorted(tracks)}, f, indent=4, ensure_ascii=True)
-        print(f"[OK] Track list saved to {self.tracks_cache_path}")
+        print(f"[OK] Track list saved to {fn}")
 
     def probe_all_tracks(self, max_track_num: int = 15) -> list[str]:
         """
@@ -390,30 +386,13 @@ class WF2PlayFab:
     # Leaderboard queries
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def normalize_leaderboard_name(name: str) -> str:
-        """
-        Normalize a leaderboard name to full form.
-        If name does not start with "ce-", prepend it.
-        If name does not end with "-class_all", append it.
-        Examples:
-          "track01_1"              -> "ce-track01_1-class_all"
-          "ce-track01_1"           -> "ce-track01_1-class_all"
-          "ce-track01_1-class_all" -> "ce-track01_1-class_all"
-        """
-        if not name.startswith("ce-"):
-            name = "ce-" + name
-        if not name.endswith("-class_all"):
-            name = name + "-class_all"
-        return name
-
     def get_my_time(self, leaderboard_name: str, output_file: str | None = None) -> dict | None:
         """
         Get current player's own entry from a leaderboard.
         leaderboard_name is normalized automatically:
           missing "ce-" prefix and/or "-class_all" suffix are added if absent.
         """
-        leaderboard_name = self.normalize_leaderboard_name(leaderboard_name)
+        leaderboard_name = get_lb_name_by_track_id(leaderboard_name)
         entries = self.client.get_leaderboard_around_entity(leaderboard_name, entity_id = self.entity_id, surrounding = 0)
         entry = entries[0] if entries else None
         if output_file and entry:
@@ -433,7 +412,7 @@ class WF2PlayFab:
         The result is approximate: other players may have improved in the
         meantime, but it is accurate enough for display purposes.
         """
-        leaderboard_name = self.normalize_leaderboard_name(leaderboard_name)
+        leaderboard_name = get_lb_name_by_track_id(leaderboard_name)
         start = max(1, old_rank - 99)
         entries, _ = self.client.get_leaderboard_page(leaderboard_name, starting_position=start, page_size=100)
         for entry in entries:
@@ -447,26 +426,26 @@ class WF2PlayFab:
         Fetch current player's best lap from every known track leaderboard.
         Returns dict: { leaderboard_name: entry_dict }
         """
-        tracks = self.load_track_names()
-        print(f"[INFO] Fetching times for {len(tracks)} track leaderboards...")
-
+        tracks = self.load_tracks_info()
+        print(f"[INFO] Fetching times for {len(tracks)} leaderboards...")
         results = { }
-        for name in tracks:
+        for tid, tinfo in tracks.items():
+            name = get_lb_name_by_track_id(tid)
             try:
                 entries = self.client.get_leaderboard_around_entity(name, entity_id = self.entity_id, surrounding = 0)
                 if entries:
-                    results[name] = entries[0]
+                    results[tid] = entries[0]
                     score_ms = entries[0].get("Scores", ["?"])[0]
                     rank     = entries[0].get("Rank", "?")
-                    print(f"  {name:44s}  rank={rank:>5}  time={fmt_ms(score_ms)}")
+                    print(f"  {tid:44s}  rank={rank:>5}  time={fmt_ms(score_ms)}")
                 else:
-                    print(f"  {name:44s}  (no entry)")
+                    print(f"  {tid:44s}  (no entry)")
             except RuntimeError as e:
                 err = str(e)
                 if "LeaderboardNotFound" in err or '"errorCode":1001' in err:
                     pass  # Board does not exist, skip silently
                 else:
-                    print(f"  {name:44s}  ERROR: {e}")
+                    print(f"  {tid:44s}  ERROR: {e}")
 
         if output_file:
             save_json(results, output_file)
@@ -479,7 +458,7 @@ class WF2PlayFab:
         Automatically paginates for max_results > 100.
         If output_file is given, saves results in compact leaderboard JSON format.
         """
-        leaderboard_name = self.normalize_leaderboard_name(leaderboard_name)
+        leaderboard_name = get_lb_name_by_track_id(leaderboard_name)
         entries = self.client.get_leaderboard(leaderboard_name, max_results)
         if output_file:
             save_leaderboard_json(entries, output_file)

@@ -1,30 +1,39 @@
 {
-    "tracks": [
-        "ce-track01_1-class_all",
-        "ce-track01_1_rev-class_all",
-        "ce-track02_1-class_all",
-        "ce-track02_1_rev-class_all",
-        "ce-track02_2-class_all",
-        "ce-track02_2_rev-class_all",
-        "ce-track04_1-class_all",
-        "ce-track04_1_rev-class_all",
-        "ce-track05_1-class_all",
-        "ce-track05_1_rev-class_all",
-        "ce-track06_1-class_all",
-        "ce-track06_3-class_all",
-        "ce-track06_4-class_all",
-        "ce-track07_1-class_all",
-        "ce-track07_1_rev-class_all",
-        "ce-track07_3-class_all",
-        "ce-track07_4-class_all",
-        "ce-track07_5-class_all",
-        "ce-track09_1-class_all",
-        "ce-track09_2-class_all",
-        "ce-track10_1-class_all",
-        "ce-track10_2-class_all",
-        "ce-track11_1-class_all",
-        "ce-track11_2-class_all",
-        "ce-track12_1-class_all",
-        "ce-track12_2-class_all"
-    ]
+    "tracks": {
+        "track01_1"     : { "name": "Sandpit" },
+        "track01_1_rev" : { "name": "Sandpit Reverse" },
+
+        "track02_1"     : { "name": "Savolax main" },
+        "track02_1_rev" : { "name": "Savolax main reverse" },
+        "track02_2"     : { "name": "Savolax short" },
+        "track02_2_rev" : { "name": "Savolax short reverse" },
+
+        "track04_1"     : { "name": "Folk Racing" },
+        "track04_1_rev" : { "name": "Folk Racing Reverse" },
+
+        "track05_1"     : { "name": "European Rallycross" },
+        "track05_1_rev" : { "name": "European Rallycross Reverse" },
+
+        "track06_1"     : { "name": "Speedway race" },
+        "track06_3"     : { "name": "Speedway derby" },
+        "track06_4"     : { "name": "Speedway figure 8" },
+
+        "track07_1"     : { "name": "Scrapyard main" },
+        "track07_1_rev" : { "name": "Scrapyard main reverse" },
+        "track07_3"     : { "name": "Scrapyard bonebreaker" },
+        "track07_4"     : { "name": "Scrapyard figure 8" },
+        "track07_5"     : { "name": "Scrapyard derby" },
+
+        "track09_1"     : { "name": "Testing Grounds" },
+        "track09_2"     : { "name": "Testing Grounds reverse" },
+
+        "track10_1"     : { "name": "Banger Racing Oval" },
+        "track10_2"     : { "name": "Banger Racing Figure 8" },
+
+        "track11_1"     : { "name": "Finncross" },
+        "track11_2"     : { "name": "Finncross Reverse" },
+
+        "track12_1"     : { "name": "Dalsbanen" },
+        "track12_2"     : { "name": "Dalsbanen Reverse" }
+    }
 }
