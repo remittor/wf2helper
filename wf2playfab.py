@@ -43,7 +43,8 @@ class PlayFabClient:
 
     BASE_URL = "https://{title_id}.playfabapi.com"
 
-    def __init__(self, title_id: str):
+    def __init__(self, title_id: str, verbose: int = 0):
+        self.verbose      = verbose
         self.title_id     = title_id
         self.base_url     = self.BASE_URL.format(title_id=title_id)
         self.entity_id    : str | None = None
@@ -146,6 +147,8 @@ class PlayFabClient:
             if not page:
                 break
             all_entries.extend(page)
+            if self.verbose:
+                print(f'[PlayFab] Downloaded {entry_count} entries (start_pos = {starting_position})')
             if len(all_entries) >= entry_count:
                 break  # fetched everything available
             starting_position += len(page)
@@ -262,9 +265,10 @@ class WF2PlayFab:
 
     PF_TITLE_ID = "54936"
 
-    def __init__(self, cache_dir: str | None = None):
+    def __init__(self, cache_dir: str | None = None, verbose: int = 0):
+        self.verbose   = verbose
         self.app       = WF2App(cache_dir=cache_dir)
-        self.client    = PlayFabClient(self.PF_TITLE_ID)
+        self.client    = PlayFabClient(self.PF_TITLE_ID, verbose)
         self.entity_id : str | None = None
         self.cache_dir = cache_dir or os.path.dirname(os.path.abspath(__file__))
         self.tracks_cache_path = os.path.join(self.cache_dir, WF2_TRACKS_CACHE_FILE)
@@ -611,6 +615,7 @@ if __name__ == "__main__":
         parser.add_argument("--cache-dir", "-C", default = None, help = "Directory containing wf2mem.json (default: script directory)")
         parser.add_argument("--output", "-o", default = None, help = "Save results to JSON file")
         parser.add_argument("--no-attach", "-@", action = "store_true", help = "Do not attach to game process (use cached token only)")
+        parser.add_argument("--verbose", "-v", type = int, default = 0, help = "Logging level")
 
     # probe
     p_probe = sub.add_parser("probe", help = "Probe PlayFab to discover all existing track leaderboards")
@@ -632,7 +637,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cache_dir = args.cache_dir or os.path.dirname(os.path.abspath(__file__))
-    wf2 = WF2PlayFab(cache_dir = cache_dir)
+    wf2 = WF2PlayFab(cache_dir = cache_dir, verbose = args.verbose)
     try:
         print("Initializing PlayFab auth...")
         ok = wf2.init_auth(attach_game = not args.no_attach)
