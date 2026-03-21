@@ -142,7 +142,7 @@ class PlayFabClient:
                 break
             all_entries.extend(page)
             if self.verbose:
-                print(f'[PlayFab] Downloaded {entry_count} entries (start_pos = {starting_position})')
+                print(f'[PlayFab] Downloaded {len(page)} entries (start_pos = {starting_position})')
             if len(all_entries) >= entry_count:
                 break  # fetched everything available
             starting_position += len(page)
@@ -513,11 +513,19 @@ def save_leaderboard_json(entries: list[dict], path: str):
 
     lines = [ ]
     for i, e in enumerate(entries):
-        rank  = e.get("Rank", i + 1)
+        rank  = e.get("Rank", 0)
+        if rank <= 0:
+            continue
         score = '"' + fmt_ms(e.get("Scores", [0])[0]) + '"'
-        name  = (e.get("DisplayName") or "").replace('"', '\"')
+        name  = e.get("DisplayName", "").replace('"', '\"')
         eid   = '"' + e.get("Entity", { }).get("Id", "") + '"'
-        lines.append(f'  {rank:{rank_w}}: {{ "pid": {eid:>18}, "time": {score:>13}, "name": "{name}" }}')
+        ts    = '"' + e.get("LastUpdated", "") + '"'
+        aux = '[ ]'
+        if 'Scores' in e and len(e["Scores"]) >= 5:
+            scr = [ abs(int(val)) for val in e["Scores"] ]
+            scr3 = scr[3] if scr[3] >= 0 else 0x100 + scr[3]
+            aux = f'[{scr[1]},0x{scr[2]:04X},0x{scr3:02X},0x{scr[4]:08X}]'
+        lines.append(f'  {rank:{rank_w}}: {{ "ts": {ts:<26}, "pid": {eid:>18}, "time": {score:>13}, "aux": {aux:<28}, "name": "{name}" }}')
         pass
     text = '{\n' + ',\n'.join(lines) + '\n}'
     with open(path, "w", encoding="utf-8") as f:
