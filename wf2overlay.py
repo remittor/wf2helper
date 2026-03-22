@@ -874,7 +874,7 @@ class PlayFabWorker:
             # Fetch rank page. Single GetLeaderboard call: start=max(1, pb_rank-98), page_size=100.
             # Stored as list of (rank, score_ms), rank ascending, score_ms lower=faster.
             if max_rank > 0:
-                lb_name = self.playfab.normalize_leaderboard_name(track_id)
+                lb_name = get_lb_name_by_track_id(track_id)
                 start = max(1, max_rank - 95)
                 page, _ = self.playfab.client.get_leaderboard_page(lb_name, starting_position = start, page_size = 100)
                 rank_page = [ (entry.get("Rank", 0), int(entry.get("Scores", [0])[0])) for entry in page ]
