@@ -661,6 +661,7 @@ class WF2Helper:
 
         lb_ov_cfg = ovs.get("leaderboard")
         if lb_ov_cfg is not None:
+            from wf2ov_leaderboard import LeaderboardOverlay, LeaderboardState
             self.lb_ov_cfg = get_ov_cfg(lb_ov_cfg)
             self.lb_ov = LeaderboardOverlay(self.lb_ov_cfg)
             self.lb_state = LeaderboardState()
@@ -668,6 +669,7 @@ class WF2Helper:
 
         adv_ov_cfg = ovs.get("advinfo")
         if adv_ov_cfg is not None:
+            from wf2ov_advinfo import AdvInfoOverlay, AdvInfoState
             self.adv_ov_cfg = get_ov_cfg(adv_ov_cfg)
             self.adv_ov = AdvInfoOverlay(self.adv_ov_cfg)
             self.adv_state = AdvInfoState()
@@ -675,6 +677,7 @@ class WF2Helper:
 
         car_phys_cfg = ovs.get("car_phys")
         if car_phys_cfg is not None:
+            from wf2ov_carphys import CarPhysOverlay, CarPhysState
             self.car_phys_cfg = get_ov_cfg(car_phys_cfg)
             self.car_phys_ov = CarPhysOverlay(self.car_phys_cfg)
             self.car_phys_state = CarPhysState()
@@ -682,6 +685,7 @@ class WF2Helper:
 
         tail_cfg = ovs.get("taildist")
         if tail_cfg is not None and self.lb_state:
+            from wf2ov_taildist import TailDistOverlay, TailDistState
             self.tail_cfg = get_ov_cfg(tail_cfg)
             self.tail_ov = TailDistOverlay(self.tail_cfg)
             radius_m = float(self.tail_cfg.get("max_view_radius", 250.0))
@@ -781,6 +785,7 @@ class WF2Helper:
             self.receiver.create_retrasmitter(retr['udp_port'], retr['dst_host'])
 
         if self.adv_state:
+            from wf2ov_advinfo import PlayFabWorker
             pf_worker = PlayFabWorker(daemon = False)
             res = pf_worker.fetch('track01_1', rank_page = -1)
             del pf_worker
