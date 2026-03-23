@@ -385,7 +385,7 @@ class AdvInfoState:
         if self.pf_worker.state != PF_WRK_IDLE:
             return  # request already active
         now = time.monotonic()
-        if now - self.req_playfab_time < 101.0:
+        if now - self.req_playfab_time < 55.0:
             return  # wait before run next request
         self.req_playfab_time = now
         if data.pb_time <= 0:
