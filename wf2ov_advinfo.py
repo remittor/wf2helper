@@ -417,14 +417,15 @@ class AdvInfoState:
         if data.lap_time_best <= 0 or data.pb_time <= 0:
             return
         prev_pb_time_new = data.pb_time_new
-        if data.lap_time_best < data.pb_time:
+        if data.lap_time_best < data.pb_time or data.lap_time_best < data.pb_time_new:
             data.pb_time_new = data.lap_time_best
-            if data.rank_dict and data.pb_rank_new == 0:
+            data.pb_rank_new = 0
+        if data.pb_rank_new == 0 and data.pb_time_new > 0:
+            data.pb_rank_new = -1  # unknown new rank
+            if data.rank_dict:
                 dict_first_rank = next(iter(data.rank_dict))
                 dict_first_time = data.rank_dict[dict_first_rank]['score_ms']
-                if data.pb_time_new <= dict_first_time:
-                    data.pb_rank_new = 0  # unknown new rank
-                else:
+                if data.pb_time_new > dict_first_time:
                     for rank, rank_val in data.rank_dict.items():
                         if rank_val['score_ms'] > data.pb_time_new:
                             data.pb_rank_new = rank
