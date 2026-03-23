@@ -494,7 +494,7 @@ class AdvInfoState:
             if not after_race:
                 after_race = (p_status & PLAYER_STATUS_CONTROL_AI) or (g_status & GAME_STATUS_IN_RACE) == 0
 
-        if not data.race_stopped and data.race_started and after_race:
+        if not data.race_stopped and (data.race_inited or data.race_started) and after_race:
             data.race_stopped = True
             data.race_inited = False
             print('>>> race_stopped')
