@@ -100,6 +100,63 @@ def fmt_time(time_ms: int, e: int = 0) -> str:
     return f"{mins:02d}:{secs:02d}.{frac:03d}"
 
 
+def save_overlay_position(yaml_path: str, section: str, x: int, y: int) -> bool:
+    """
+    Update x and y values for a named overlay section in a YAML file.
+    Preserves all comments, indentation and formatting — edits raw text lines.
+    """
+    import re
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as file:
+            text = file.read()
+    except Exception as e:
+        print(f"[OV] Cannot read {yaml_path}: {e}")
+        return False
+    lines        = text.splitlines(keepends = True)
+    section_pat  = re.compile(r"^(\s+)" + re.escape(section) + r"\s*:")
+    xy_pat       = re.compile(r"^(\s+)(x|y)(\s*:\s*)(-?\d+)(.*)")
+    in_section   = False
+    section_indent = ""
+    changed      = { "x": False, "y": False }
+    result       = [ ]
+    for line in lines:
+        if not in_section:
+            m = section_pat.match(line)
+            if m:
+                in_section = True
+                section_indent = m.group(1)
+            result.append(line)
+            continue
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            indent = len(line) - len(line.lstrip())
+            if indent <= len(section_indent):
+                in_section = False
+                result.append(line)
+                continue
+        m = xy_pat.match(line)
+        if m:
+            key = m.group(2)
+            if key == "x" and not changed["x"]:
+                line = m.group(1) + "x" + m.group(3) + str(x) + m.group(5) + "\n"
+                changed["x"] = True
+            elif key == "y" and not changed["y"]:
+                line = m.group(1) + "y" + m.group(3) + str(y) + m.group(5) + "\n"
+                changed["y"] = True
+        result.append(line)
+        pass
+    if not changed["x"] or not changed["y"]:
+        print(f"[OV] Section '{section}': x/y not found (x={changed['x']}, y={changed['y']})")
+        return False
+    try:
+        with open(yaml_path, "w", encoding="utf-8") as file:
+            file.write("".join(result))
+        return True
+    except Exception as e:
+        print(f"[OV] Cannot write {yaml_path}: {e}")
+        return False
+
+
 class BaseOverlay:
     """
     Always-on-top tkinter text overlay with optional semi-transparent background.
@@ -279,6 +336,11 @@ class BaseOverlay:
 
         root.bind("<ButtonPress-1>", self.drag_start)
         root.bind("<B1-Motion>",     self.drag_motion)
+        root.bind("<ButtonRelease-1>", self.drag_end)
+        if bg:
+            bg.bind("<ButtonPress-1>", self.drag_start)
+            bg.bind("<B1-Motion>",     self.drag_motion)
+            bg.bind("<ButtonRelease-1>", self.drag_end)
 
         self.poll()
         root.mainloop()
@@ -408,4 +470,13 @@ class BaseOverlay:
             # Move bg_root to same position
             if self.bg_root:
                 self.bg_root.geometry(f"+{x}+{y}")
+
+    def drag_end(self, event) -> None:
+        """Called on ButtonRelease-1. Save final position to yaml if configured."""
+        if self.root:
+            x = self.root.winfo_x()
+            y = self.root.winfo_y()
+            ok = save_overlay_position(self.cfg_path, self.cfg_sec, x, y)
+            if ok:
+                print(f'[OV] overlay "{self.cfg_sec}" position saved: x = {x}, y = {y}')
 
