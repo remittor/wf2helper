@@ -81,8 +81,9 @@ WF2_SURF = { 0: " --- ", 1: " AIR ", 2: " GND ", 3: " GRS ", 4: " GVL ", 5: " MU
 
 
 class AdvInfoOverlay(BaseOverlay):
-    def __init__(self, ov: dict):
-        super().__init__(ov, "WF2 AdvInfo")
+    def __init__(self, cfg_path: str):
+        super().__init__(cfg_path, "advinfo", "WF2 AdvInfo")
+        self.start()
 
     def render(self, s_data: AdvInfoSnapshot) -> list:
         s = self.gen_segment  # segment builder

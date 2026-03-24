@@ -78,8 +78,8 @@ class TailDistState:
     """
     NAME_MAX_LEN = 12
 
-    def __init__(self, radius_m: float = 250.0):
-        self.radius_m         = radius_m
+    def __init__(self, cfg: dict = { }):
+        self.radius_m = float(cfg.get("max_view_radius", 250.0))
         self.player_x         = 0.0
         self.player_z         = 0.0
         self.heading_x        = 0.0
@@ -176,9 +176,10 @@ class TailDistOverlay(BaseOverlay):
     POLL_INTERVAL_DEFAULT = 20
     MAX_DELTA_MS_DEFAULT  = 15000
 
-    def __init__(self, ov: dict):
-        self.ov = ov
-        self.show         = bool(ov.get("show", True))
+    def __init__(self, cfg_path: str):
+        super().__init__(cfg_path, "taildist", "WF2 TailDist")
+        ov = self.ov
+
         self.fov          = float(ov.get("fov",           self.FOV_DEFAULT))
         self.canvas_h     = int(  ov.get("canvas_height", self.CANVAS_HEIGHT_DEFAULT))
         self.marker_width = float(ov.get("marker_width",  self.MARKER_WIDTH_DEFAULT))
@@ -199,7 +200,8 @@ class TailDistOverlay(BaseOverlay):
 
         self.proc = Win64Process()
         self.proc.find_process(WF2_EXE_NAME)
-        super().__init__(ov, "WF2 TailDist")
+        
+        self.start()
 
     # ------------------------------------------------------------------
     # Public API

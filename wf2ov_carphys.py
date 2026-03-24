@@ -75,12 +75,13 @@ class CarPhysOverlay(BaseOverlay):
     """
     DIAL_RADIUS_DEFAULT = 40
 
-    def __init__(self, ov: dict):
+    def __init__(self, cfg_path: str):
+        super().__init__(cfg_path, "car_phys", "WF2 CarPhys")
+        ov = self.ov
         # Force bg_alpha to 0 so BaseOverlay skips bg_root creation
-        ov = dict(ov)
         ov["bg_alpha"] = 0.0
         self.dial_radius = int(ov.get("dial_radius", self.DIAL_RADIUS_DEFAULT))
-        super().__init__(ov, "WF2 CarPhys")
+        self.start()
 
     # BaseOverlay.render() must return list-of-lines for text.
     # We return empty list — all drawing is done in draw_graphic().

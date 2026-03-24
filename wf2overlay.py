@@ -28,6 +28,7 @@ Appearance keys (same for both sections):
 """
 
 import os
+import sys
 import tkinter as tk
 import tkinter.font as tkfont
 import threading
@@ -37,6 +38,8 @@ from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from copy import deepcopy
 import math
+
+import yaml
 
 from win64proc import Win64Process
 from wf2telemetry import *
@@ -121,9 +124,13 @@ class BaseOverlay:
     SHADOW_DY = 1
     PAD       = 4   # canvas padding px
 
-    def __init__(self, ov: dict, title: str):
-        self.ov     = ov
-        self.title  = title
+    def __init__(self, cfg_path: str, cfg_sec: str, title: str):
+        self.title        = title
+        self.cfg_path     = cfg_path
+        self.cfg_sec      = cfg_sec
+        self.config       = None  # Full yaml config
+        self.ov           = None  # only section cfg_sec from yaml config
+        ov = self.load_config()
         
         self.show         = bool(ov.get("show", True))
         self.bg_alpha     = float(ov.get("bg_alpha", 0.2))
@@ -153,6 +160,23 @@ class BaseOverlay:
         self.cw     = 0      # char width px
         self.lh     = 0      # line height px
         self.thread = threading.Thread(target = self.run, daemon = True)
+
+    def load_config(self):
+        self.config = None
+        self.ov = None
+        cfg = None
+        with open(self.cfg_path, "r", encoding = "utf-8") as file:
+            self.config = yaml.safe_load(file)
+            root_ov = self.config.get("overlays", None)
+            if root_ov and self.cfg_sec:
+                cfg = root_ov.get(self.cfg_sec, None)
+        if not cfg:
+            print(f'[ERROR] section "overlays/{self.cfg_sec}" not found into YAML config!')
+            sys.exit(1)
+        self.ov = get_ov_cfg(cfg)
+        return self.ov
+        
+    def start(self):
         self.thread.start()
 
     def push(self, data) -> None:

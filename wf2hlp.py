@@ -632,7 +632,8 @@ def check_and_patch_telemetry_config(udp_port: int, patch_game_config: bool = Tr
 
 class WF2Helper:
     def __init__(self, cfg_file = None):
-        self.cfg = load_config(cfg_file if cfg_file else DEFAULT_CONFIG_PATH)
+        self.cfg_path = cfg_file if cfg_file else DEFAULT_CONFIG_PATH
+        self.cfg = load_config(self.cfg_path)
         self.gearauto = False
         self.show_stat = False
         self.slippage = False
@@ -659,37 +660,28 @@ class WF2Helper:
         self.tail_ov = None
         self.tail_state = None
 
-        lb_ov_cfg = ovs.get("leaderboard")
-        if lb_ov_cfg is not None:
+        if 'leaderboard' in ovs:
             from wf2ov_leaderboard import LeaderboardOverlay, LeaderboardState
-            self.lb_ov_cfg = get_ov_cfg(lb_ov_cfg)
-            self.lb_ov = LeaderboardOverlay(self.lb_ov_cfg)
+            self.lb_ov = LeaderboardOverlay(self.cfg_path)
             self.lb_state = LeaderboardState()
             self.ov_list.append(self.lb_ov)
 
-        adv_ov_cfg = ovs.get("advinfo")
-        if adv_ov_cfg is not None:
+        if 'advinfo' in ovs:
             from wf2ov_advinfo import AdvInfoOverlay, AdvInfoState
-            self.adv_ov_cfg = get_ov_cfg(adv_ov_cfg)
-            self.adv_ov = AdvInfoOverlay(self.adv_ov_cfg)
+            self.adv_ov = AdvInfoOverlay(self.cfg_path)
             self.adv_state = AdvInfoState()
             self.ov_list.append(self.adv_ov)
 
-        car_phys_cfg = ovs.get("car_phys")
-        if car_phys_cfg is not None:
+        if 'car_phys' in ovs:
             from wf2ov_carphys import CarPhysOverlay, CarPhysState
-            self.car_phys_cfg = get_ov_cfg(car_phys_cfg)
-            self.car_phys_ov = CarPhysOverlay(self.car_phys_cfg)
+            self.car_phys_ov = CarPhysOverlay(self.cfg_path)
             self.car_phys_state = CarPhysState()
             self.ov_list.append(self.car_phys_ov)
 
-        tail_cfg = ovs.get("taildist")
-        if tail_cfg is not None and self.lb_state:
+        if 'taildist' in ovs and self.lb_state:
             from wf2ov_taildist import TailDistOverlay, TailDistState
-            self.tail_cfg = get_ov_cfg(tail_cfg)
-            self.tail_ov = TailDistOverlay(self.tail_cfg)
-            radius_m = float(self.tail_cfg.get("max_view_radius", 250.0))
-            self.tail_state = TailDistState(radius_m)
+            self.tail_ov = TailDistOverlay(self.cfg_path)
+            self.tail_state = TailDistState(self.tail_ov.ov)
             self.tail_ov.attach(self.tail_state, self.lb_state)
             self.ov_list.append(self.tail_ov)
 

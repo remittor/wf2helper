@@ -147,9 +147,10 @@ class LeaderboardState:
 
 
 class LeaderboardOverlay(BaseOverlay):
-    def __init__(self, ov: dict):
-        super().__init__(ov, "WF2 Leaderboard")
-        self.show_slot_num = ov.get('show_slot_num', False)
+    def __init__(self, cfg_path: str):
+        super().__init__(cfg_path, "leaderboard", "WF2 Leaderboard")
+        self.show_slot_num = self.ov.get('show_slot_num', False)
+        self.start()
 
     def render(self, snap: LeaderboardSnapshot) -> list:
         seg = self.gen_segment
