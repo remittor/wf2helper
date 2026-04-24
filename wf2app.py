@@ -16,17 +16,11 @@ WF2_PF_TITLE_ID   = "54936"
 WF2_EXE_NAME      = "Wreckfest2.exe"
 WF2_WND_SUBSTRING = "Wreckfest 2 |"
 
-# Pattern constants used by find_playfab_entity_token_addr
-PF_PATTERN_U32_AT_0  = 0x00000010
-PF_PATTERN_U32_AT_16 = 0xEA0EA059
-PF_PATTERN_U32_AT_24 = 0x40000000
 PF_MIN_HEAP_ADDR     = 0x200000000
 PF_HEAP_ALIGN        = 16
 
 # Offsets within the located PFInfo block
-PF_INFO_HEAP_PTR_OFFSET   = 32
-PF_INFO_HEAP_PTR_CONFIRM  = 56
-PF_INFO_TOKEN_BASE_OFFSET = 64
+PF_INFO_TOKEN_BASE_OFFSET = 0x40
 PF_TOKEN_INDIRECT_OFFSET  = 16
 
 # wf2mem.json file name
@@ -245,26 +239,37 @@ class WF2Process(Win64Process):
         Returns local byte offset of the match or None.
 
         Pattern checks (offsets relative to candidate start):
-          +0   uint32 == PF_PATTERN_U32_AT_0  (0x00000010)
-          +16  uint32 == PF_PATTERN_U32_AT_16 (0xEA0EA059)
-          +24  uint32 == PF_PATTERN_U32_AT_24 (0x40000000)
-          +32  uint64 -> valid heap ptr
-          +56  uint64 == value at +32
-          +64  uint64 -> valid heap ptr
-          ptr at +32 / +56 must be in MEM_PRIVATE / RW / COMMIT region
-          ptr at +64 must be in MEM_PRIVATE / RW / COMMIT region
+          +x00  uint32 == PF_PATTERN_U32_AT_x00 (0x00000010)
+          +x10  uint32 == PF_PATTERN_U32_AT_x10 (0xEA0EA059)
+          +x18  uint32 == PF_PATTERN_U32_AT_x18 (0x40000000)
+          +x20  uint64 -> valid heap ptr
+          +x38  uint64 == value at +0x20
+          +x40  uint64 -> valid heap ptr  [TARGET]  PF_INFO_TOKEN_BASE_OFFSET
+          +x88  uint32 == 
+          ptr at +0x20 / +0x38 must be in MEM_PRIVATE / RW / COMMIT region
+          ptr at +0x40         must be in MEM_PRIVATE / RW / COMMIT region
         """
+        #PF_PATTERN_U32_AT_x00 = 0x00000010   # maybe 0x0000000E
+        #PF_PATTERN_U32_AT_x10 = 0xEA0EA059   # maybe 0x4ABC4F08
+        PF_PATTERN_U32_AT_x18 = 0x40000000
+        PF_INFO_HEAP_PTR_OFFSET   = 0x20
+        PF_INFO_HEAP_PTR_CONFIRM  = 0x38
+        PF_INFO_TOKEN_BASE_OFFSET = 0x40
+        PF_PATTERN_U32_AT_x88 = 0x020007D0
+
         size = len(region_data)
         # minimum block size to hold all fields: +64 + 8 = 72 bytes
         if size < 72:
             return None
 
         for offset in range(0, size - 72, 4):
-            if read_u32(region_data, offset) != PF_PATTERN_U32_AT_0:
+            #if read_u32(region_data, offset) != PF_PATTERN_U32_AT_x00:
+            #    continue
+            #if read_u32(region_data, offset + 0x10) != PF_PATTERN_U32_AT_x10:
+            #    continue
+            if read_u32(region_data, offset + 0x18) != PF_PATTERN_U32_AT_x18:
                 continue
-            if read_u32(region_data, offset + 16) != PF_PATTERN_U32_AT_16:
-                continue
-            if read_u32(region_data, offset + 24) != PF_PATTERN_U32_AT_24:
+            if read_u32(region_data, offset + 0x88) != PF_PATTERN_U32_AT_x88:
                 continue
 
             ptr32 = read_u64(region_data, offset + PF_INFO_HEAP_PTR_OFFSET)
